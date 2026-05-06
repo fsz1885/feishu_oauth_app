@@ -119,7 +119,7 @@ def index():
             <div>
               <div class="field">
                 <label for="keyword">搜索关键词 q</label>
-                <input id="keyword" type="text" placeholder="例如：项目、文字记录" value="项目" />
+                <input id="keyword" type="text" placeholder="例如：项目、文字记录" value="" />
               </div>
               <div class="field">
                 <label for="userSelect">选择已授权用户</label>
