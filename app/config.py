@@ -22,6 +22,8 @@ class Settings:
     debug: bool = os.getenv("APP_DEBUG", "false").lower() == "true"
     store_path: str = os.getenv("LOCAL_STORE_PATH", "data/auth_store.json")
     public_base_url: str = os.getenv("PUBLIC_BASE_URL", "").rstrip("/")
+    contact_cache_refresh_seconds: int = int(os.getenv("CONTACT_CACHE_REFRESH_SECONDS", "3600"))
+    contact_cache_startup_refresh: bool = os.getenv("CONTACT_CACHE_STARTUP_REFRESH", "true").lower() == "true"
     requested_scopes: List[str] = field(
         default_factory=lambda: [
             # 用户身份与 OAuth 基础能力

@@ -34,4 +34,5 @@ def create_app() -> Flask:
     app.register_blueprint(auth_bp)
     app.register_blueprint(docx_bp)
     app.register_blueprint(search_bp)
+    invite_service.start_contact_cache_scheduler()
     return app

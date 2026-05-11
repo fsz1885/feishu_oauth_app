@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import json
+import threading
 from typing import Any, Dict, List, Optional
 
 import requests
 
 from app.config import Settings
+from app.utils.time_utils import iso_now
 
 
 class FeishuInviteService:
@@ -13,6 +15,14 @@ class FeishuInviteService:
 
     def __init__(self, settings: Settings):
         self.settings = settings
+        self._cache_lock = threading.RLock()
+        self._refresh_lock = threading.Lock()
+        self._cached_users: List[Dict[str, Any]] = []
+        self._cache_meta: Dict[str, Any] = self._empty_meta()
+        self._cache_error: Optional[str] = None
+        self._cache_refreshed_at: Optional[str] = None
+        self._cache_refreshing = False
+        self._scheduler_started = False
 
     def search_users(self, keyword: str, *, limit: int = 20) -> List[Dict[str, Any]]:
         return self.search_users_with_meta(keyword, limit=limit)["users"]
@@ -22,6 +32,103 @@ class FeishuInviteService:
         if not keyword:
             return {"users": [], "meta": self._empty_meta()}
 
+        with self._cache_lock:
+            cached_users = list(self._cached_users)
+            cache_meta = dict(self._cache_meta)
+
+        if not cached_users:
+            self.refresh_contact_cache()
+            with self._cache_lock:
+                cached_users = list(self._cached_users)
+                cache_meta = dict(self._cache_meta)
+
+        if cached_users:
+            matched = [user for user in cached_users if self._matches_keyword(user, keyword)]
+            meta = dict(cache_meta)
+            meta.update({
+                "matched_fields": ["name", "en_name", "email", "mobile", "user_id", "open_id", "union_id"],
+                "cache_hit": True,
+                "matched_count": len(matched),
+            })
+            return {"users": matched[:limit], "meta": meta}
+
+        return self._search_users_live(keyword, limit=limit)
+
+    def list_cached_contacts(self, *, limit: Optional[int] = None, offset: int = 0) -> Dict[str, Any]:
+        with self._cache_lock:
+            users = list(self._cached_users)
+            meta = dict(self._cache_meta)
+            error = self._cache_error
+            refreshed_at = self._cache_refreshed_at
+            refreshing = self._cache_refreshing
+
+        total = len(users)
+        if offset < 0:
+            offset = 0
+        if limit is not None:
+            users = users[offset:offset + limit]
+        else:
+            users = users[offset:]
+
+        meta.update({
+            "cache_hit": True,
+            "cache_error": error,
+            "cache_refreshed_at": refreshed_at,
+            "cache_refreshing": refreshing,
+            "total_cached_user_count": total,
+        })
+        return {"users": users, "meta": meta}
+
+    def refresh_contact_cache(self) -> Dict[str, Any]:
+        self._refresh_lock.acquire()
+
+        with self._cache_lock:
+            self._cache_refreshing = True
+
+        try:
+            result = self._fetch_all_visible_contacts()
+            with self._cache_lock:
+                self._cached_users = result["users"]
+                self._cache_meta = result["meta"]
+                self._cache_error = None
+                self._cache_refreshed_at = iso_now()
+            return self.list_cached_contacts()
+        except Exception as exc:  # noqa: BLE001
+            with self._cache_lock:
+                self._cache_error = str(exc)
+            raise
+        finally:
+            with self._cache_lock:
+                self._cache_refreshing = False
+            self._refresh_lock.release()
+
+    def refresh_contact_cache_async(self) -> None:
+        thread = threading.Thread(target=self._safe_refresh_contact_cache, name="feishu-contact-cache-refresh", daemon=True)
+        thread.start()
+
+    def start_contact_cache_scheduler(self) -> None:
+        if self._scheduler_started:
+            return
+        self._scheduler_started = True
+        thread = threading.Thread(target=self._contact_cache_scheduler_loop, name="feishu-contact-cache-scheduler", daemon=True)
+        thread.start()
+
+    def _safe_refresh_contact_cache(self) -> None:
+        try:
+            self.refresh_contact_cache()
+        except Exception:
+            return
+
+    def _contact_cache_scheduler_loop(self) -> None:
+        if self.settings.contact_cache_startup_refresh:
+            self._safe_refresh_contact_cache()
+
+        interval = max(int(self.settings.contact_cache_refresh_seconds or 0), 60)
+        while True:
+            threading.Event().wait(interval)
+            self._safe_refresh_contact_cache()
+
+    def _search_users_live(self, keyword: str, *, limit: int = 20) -> Dict[str, Any]:
         token = self.get_tenant_access_token()
         scope = self.get_contact_scope(token)
         department_ids = scope.get("department_ids") or []
@@ -92,6 +199,61 @@ class FeishuInviteService:
                 "visited_department_count": len(visited_departments),
                 "scanned_user_count": scanned_user_count,
                 "sample_users": samples,
+                "matched_fields": ["name", "en_name", "email", "mobile", "user_id", "open_id", "union_id"],
+            },
+        }
+
+    def _fetch_all_visible_contacts(self) -> Dict[str, Any]:
+        token = self.get_tenant_access_token()
+        scope = self.get_contact_scope(token)
+        department_ids = scope.get("department_ids") or []
+        scoped_user_ids = scope.get("user_ids") or []
+
+        users: List[Dict[str, Any]] = []
+        samples: List[Dict[str, Any]] = []
+        seen_keys = set()
+        scanned_user_count = 0
+        visited_departments = set()
+
+        for user_id in scoped_user_ids:
+            user = self.get_user(token, user_id)
+            if not user:
+                continue
+            scanned_user_count += 1
+            summary = self._summarize_user(user)
+            self._append_sample(samples, summary)
+            unique_key = summary.get("open_id") or summary.get("user_id")
+            if unique_key and unique_key not in seen_keys:
+                users.append(summary)
+                seen_keys.add(unique_key)
+
+        for department_id in department_ids:
+            for visible_department_id in self.expand_department_ids(token, department_id):
+                if visible_department_id in visited_departments:
+                    continue
+                visited_departments.add(visible_department_id)
+                for user in self.list_department_users(token, visible_department_id):
+                    scanned_user_count += 1
+                    summary = self._summarize_user(user)
+                    self._append_sample(samples, summary)
+                    unique_key = summary.get("open_id") or summary.get("user_id")
+                    if unique_key and unique_key not in seen_keys:
+                        users.append(summary)
+                        seen_keys.add(unique_key)
+
+        users.sort(key=lambda item: (str(item.get("name") or ""), str(item.get("open_id") or "")))
+        return {
+            "users": users,
+            "meta": {
+                "scope_department_count": len(department_ids),
+                "scope_user_count": len(scoped_user_ids),
+                "visited_department_count": len(visited_departments),
+                "scanned_user_count": scanned_user_count,
+                "sample_users": samples,
+                "total_visible_user_count": len(users),
+                "users_with_name_count": sum(1 for user in users if user.get("name")),
+                "users_with_email_count": sum(1 for user in users if user.get("email")),
+                "users_with_mobile_count": sum(1 for user in users if user.get("mobile")),
                 "matched_fields": ["name", "en_name", "email", "mobile", "user_id", "open_id", "union_id"],
             },
         }

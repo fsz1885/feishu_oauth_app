@@ -189,6 +189,7 @@ def index():
               </div>
               <div class="actions">
                 <button type="button" id="searchInviteUsersBtn">搜索通讯录成员</button>
+                <button type="button" class="secondary" id="refreshContactsBtn">刷新通讯录缓存</button>
               </div>
             </div>
             <div>
@@ -416,6 +417,41 @@ def index():
           }});
         }}
 
+        async function loadInviteContacts() {{
+          const box = document.getElementById('resultBox');
+          try {{
+            const res = await fetch('/invite/contacts?limit=500');
+            const data = await res.json();
+            if (!data.ok) {{
+              throw new Error(data.error || '加载通讯录缓存失败');
+            }}
+            inviteSearchResults = data.users || [];
+            renderInviteUsers(inviteSearchResults);
+          }} catch (err) {{
+            box.textContent = '加载通讯录缓存失败：' + err.message;
+          }}
+        }}
+
+        async function refreshInviteContacts() {{
+          const box = document.getElementById('resultBox');
+          box.textContent = '正在刷新通讯录缓存...';
+          try {{
+            const res = await fetch('/invite/contacts/refresh', {{
+              method: 'POST',
+              headers: {{ 'Content-Type': 'application/json' }},
+            }});
+            const data = await res.json();
+            if (!data.ok) {{
+              throw new Error(data.error || '刷新通讯录缓存失败');
+            }}
+            inviteSearchResults = data.users || [];
+            renderInviteUsers(inviteSearchResults);
+            box.textContent = JSON.stringify(data, null, 2);
+          }} catch (err) {{
+            box.textContent = '刷新通讯录缓存失败：' + err.message;
+          }}
+        }}
+
         async function searchInviteUsers() {{
           const keyword = document.getElementById('inviteKeyword').value.trim();
           const box = document.getElementById('resultBox');
@@ -432,6 +468,9 @@ def index():
               body: JSON.stringify({{ q: keyword }}),
             }});
             const data = await res.json();
+            if (!data.ok) {{
+              throw new Error(data.error || '搜索通讯录失败');
+            }}
             inviteSearchResults = data.users || [];
             renderInviteUsers(inviteSearchResults);
             box.textContent = JSON.stringify(data, null, 2);
@@ -519,6 +558,7 @@ def index():
 
         document.getElementById('refreshUsersBtn').addEventListener('click', loadUsers);
         document.getElementById('searchInviteUsersBtn').addEventListener('click', searchInviteUsers);
+        document.getElementById('refreshContactsBtn').addEventListener('click', refreshInviteContacts);
         document.getElementById('sendInviteBtn').addEventListener('click', sendInvite);
         document.getElementById('searchBtn').addEventListener('click', doSearch);
         document.getElementById('refreshTokenBtn').addEventListener('click', refreshSelectedUserToken);
@@ -545,6 +585,7 @@ def index():
         }});
 
         loadUsers();
+        loadInviteContacts();
       </script>
     </body>
     </html>
@@ -655,11 +696,36 @@ def search_invite_users():
     return ok(count=len(users), users=users, meta=result["meta"])
 
 
+@bp.get("/invite/contacts")
+def list_invite_contacts():
+    invite_service = current_app.extensions["invite_service"]
+    limit_arg = request.args.get("limit", "").strip()
+    offset_arg = request.args.get("offset", "").strip()
+    try:
+        limit = int(limit_arg) if limit_arg else None
+        offset = int(offset_arg) if offset_arg else 0
+    except ValueError:
+        return err("limit and offset must be integers", 400)
+
+    result = invite_service.list_cached_contacts(limit=limit, offset=offset)
+    return ok(count=len(result["users"]), users=result["users"], meta=result["meta"])
+
+
+@bp.post("/invite/contacts/refresh")
+def refresh_invite_contacts():
+    invite_service = current_app.extensions["invite_service"]
+    try:
+        result = invite_service.refresh_contact_cache()
+    except Exception as exc:  # noqa: BLE001
+        return err(str(exc), 500)
+
+    return ok(count=len(result["users"]), users=result["users"], meta=result["meta"])
+
+
 @bp.post("/invite/send")
 def send_invite():
     oauth_service = current_app.extensions["oauth_service"]
     invite_service = current_app.extensions["invite_service"]
-    settings = current_app.extensions["settings"]
     payload = request.get_json(silent=True) or {}
     open_id = str(payload.get("open_id") or request.form.get("open_id") or "").strip()
     name = str(payload.get("name") or request.form.get("name") or "").strip()
@@ -673,20 +739,29 @@ def send_invite():
         return err("receive_id is required", 400)
 
     try:
+        auth_url = oauth_service.build_auth_url()
+        invite_message = message or (
+            f"{name or '同事'}，请打开下面的链接完成飞书 OAuth 授权。"
+            "授权成功后，我这边就能在工具里选择你的账号进行搜索："
+        )
         if open_id:
-            invite_url = f"{settings.public_base_url or request.url_root.rstrip('/')}/invite"
-            result = invite_service.send_invite(open_id=open_id, name=name, invite_url=invite_url)
-            return ok(message="invite sent", open_id=open_id, name=name, invite_url=invite_url, result=result)
+            result = invite_service.send_auth_invite(
+                receive_id=open_id,
+                receive_id_type="open_id",
+                auth_url=auth_url,
+                message=invite_message,
+            )
+            return ok(message="invite sent", open_id=open_id, name=name, auth_url=auth_url, result=result)
         result = invite_service.send_auth_invite(
             receive_id=receive_id,
             receive_id_type=receive_id_type,
-            auth_url=oauth_service.build_auth_url(),
-            message=message or None,
+            auth_url=auth_url,
+            message=invite_message,
         )
     except Exception as exc:  # noqa: BLE001
         return err(str(exc), 500)
 
-    return ok(message="invite sent", auth_url=oauth_service.build_auth_url(), **result)
+    return ok(message="invite sent", auth_url=auth_url, **result)
 
 
 @bp.post("/users/refresh-token")
