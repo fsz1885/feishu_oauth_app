@@ -6,6 +6,9 @@ from app.utils.response import err, ok
 
 bp = Blueprint("search", __name__)
 
+DOCX_LINK_BASE_URL = "https://gemdalesh.feishu.cn/docx"
+TOKEN_FIELDS = ("token", "docs_token", "doc_token", "obj_token", "document_id", "file_token")
+
 
 @bp.get("/search")
 def search():
@@ -37,6 +40,7 @@ def search():
             count=50,
             max_pages=4,
         )
+        files = [_with_docx_link(file) for file in files]
     except Exception as exc:  # noqa: BLE001
         return err(str(exc), 500)
 
@@ -49,3 +53,19 @@ def search():
         count=len(files),
         files=files,
     )
+
+
+def _with_docx_link(file: dict) -> dict:
+    enriched = dict(file)
+    token = _extract_token(enriched)
+    if token and not enriched.get("url"):
+        enriched["url"] = f"{DOCX_LINK_BASE_URL}/{token}"
+    return enriched
+
+
+def _extract_token(file: dict) -> str:
+    for field in TOKEN_FIELDS:
+        value = str(file.get(field) or "").strip()
+        if value:
+            return value
+    return ""

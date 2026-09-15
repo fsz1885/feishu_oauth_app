@@ -1,12 +1,128 @@
 from __future__ import annotations
 
+from hmac import compare_digest
 from html import escape as html_escape
 
-from flask import Blueprint, current_app, redirect, request
+from flask import Blueprint, current_app, redirect, request, session, url_for
 
 from app.utils.response import err, ok
 
 bp = Blueprint("auth", __name__)
+
+
+@bp.before_app_request
+def require_frontend_password():
+    public_endpoints = {
+        "auth.frontend_login",
+        "auth.invite",
+        "auth.login",
+        "auth.callback",
+        "static",
+    }
+    if request.endpoint in public_endpoints:
+        return None
+    if session.get("frontend_authenticated"):
+        return None
+    if _wants_json_response():
+        return err("frontend password required", 401)
+    return redirect(url_for("auth.frontend_login", next=request.full_path.rstrip("?")))
+
+
+@bp.route("/front-login", methods=["GET", "POST"])
+def frontend_login():
+    next_url = _safe_next_url(request.values.get("next", "/"))
+    error_text = ""
+
+    if request.method == "POST":
+        settings = current_app.extensions["settings"]
+        password = request.form.get("password", "")
+        if compare_digest(password, settings.frontend_password):
+            session["frontend_authenticated"] = True
+            return redirect(next_url)
+        error_text = "密码不正确"
+
+    return f"""
+    <!doctype html>
+    <html lang="zh-CN">
+    <head>
+      <meta charset="utf-8" />
+      <meta name="viewport" content="width=device-width, initial-scale=1" />
+      <title>登录</title>
+      <style>
+        body {{
+          margin: 0;
+          min-height: 100vh;
+          display: grid;
+          place-items: center;
+          font-family: Arial, Helvetica, sans-serif;
+          background: #f6f8fb;
+          color: #111827;
+        }}
+        .panel {{
+          width: min(360px, calc(100vw - 32px));
+          background: white;
+          border: 1px solid #dbe3ef;
+          border-radius: 12px;
+          padding: 24px;
+          box-shadow: 0 8px 24px rgba(31, 41, 55, 0.06);
+        }}
+        h1 {{ margin: 0 0 18px; font-size: 24px; }}
+        label {{ display: block; font-weight: 700; margin-bottom: 8px; }}
+        input, button {{
+          width: 100%;
+          box-sizing: border-box;
+          font: inherit;
+          padding: 11px 12px;
+          border-radius: 10px;
+        }}
+        input {{ border: 1px solid #dbe3ef; margin-bottom: 14px; }}
+        button {{
+          border: 0;
+          background: #2563eb;
+          color: white;
+          cursor: pointer;
+          font-weight: 700;
+        }}
+        .error {{
+          margin-bottom: 12px;
+          color: #b91c1c;
+          background: #fef2f2;
+          border: 1px solid #fecaca;
+          border-radius: 10px;
+          padding: 10px 12px;
+        }}
+      </style>
+    </head>
+    <body>
+      <form class="panel" method="post" action="{url_for("auth.frontend_login")}">
+        <h1>工具登录</h1>
+        {f'<div class="error">{html_escape(error_text)}</div>' if error_text else ''}
+        <input type="hidden" name="next" value="{html_escape(next_url)}" />
+        <label for="password">密码</label>
+        <input id="password" name="password" type="password" autocomplete="current-password" autofocus required />
+        <button type="submit">登录</button>
+      </form>
+    </body>
+    </html>
+    """
+
+
+@bp.post("/front-logout")
+def frontend_logout():
+    session.pop("frontend_authenticated", None)
+    return redirect(url_for("auth.frontend_login"))
+
+
+def _safe_next_url(value: str) -> str:
+    if not value or not value.startswith("/") or value.startswith("//"):
+        return "/"
+    return value
+
+
+def _wants_json_response() -> bool:
+    if request.path.startswith(("/search", "/users", "/docx", "/invite/", "/capture")):
+        return True
+    return request.accept_mimetypes.best == "application/json"
 
 
 @bp.get("/")
@@ -67,7 +183,7 @@ def index():
         }}
         .field {{ display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px; }}
         label {{ font-weight: 600; }}
-        input, select, textarea, button {{
+        input, select, textarea, button, .button-link {{
           font: inherit;
           padding: 10px 12px;
           border: 1px solid var(--border);
@@ -75,13 +191,17 @@ def index():
           box-sizing: border-box;
         }}
         textarea {{ min-height: 110px; resize: vertical; }}
-        button {{
+        button, .button-link {{
           background: var(--primary);
           color: white;
           border: none;
           cursor: pointer;
         }}
-        button.secondary {{
+        .button-link {{
+          display: inline-block;
+          text-decoration: none;
+        }}
+        button.secondary, .button-link.secondary {{
           background: #eef2ff;
           color: #1e3a8a;
           border: 1px solid #c7d2fe;
@@ -127,7 +247,7 @@ def index():
           min-height: 82px;
           background: #f8fafc;
         }}
-        pre {{
+        pre, .result-box {{
           white-space: pre-wrap;
           word-break: break-word;
           background: #0f172a;
@@ -135,6 +255,33 @@ def index():
           padding: 14px;
           border-radius: 12px;
           overflow: auto;
+        }}
+        .result-box {{
+          display: grid;
+          gap: 12px;
+        }}
+        .result-card {{
+          background: #111827;
+          border: 1px solid #334155;
+          border-radius: 10px;
+          padding: 12px;
+        }}
+        .result-title {{
+          color: #f8fafc;
+          font-weight: 700;
+          margin-bottom: 6px;
+        }}
+        .result-meta {{
+          color: #94a3b8;
+          font-size: 12px;
+          margin-bottom: 8px;
+        }}
+        .result-link {{
+          color: #93c5fd;
+          font-weight: 700;
+        }}
+        .result-json {{
+          margin-top: 4px;
         }}
         .muted {{ color: var(--muted); }}
         .tiny {{ font-size: 12px; }}
@@ -156,9 +303,10 @@ def index():
           <h1>Feishu OAuth + Search Demo</h1>
           <p class="muted">搜索必须选择本地已授权用户，前端只会把选中的 <code>user_key</code> 带到后端。</p>
           <div class="actions">
-            <a href="/login"><button type="button">新增授权用户</button></a>
+            <a class="button-link" href="/login">新增授权用户</a>
             <button type="button" class="secondary" id="refreshUsersBtn">刷新用户列表</button>
-            <a href="/users" target="_blank"><button type="button" class="secondary">查看 /users</button></a>
+            <button type="button" class="secondary" id="refreshAllTokensBtn">刷新全部 token</button>
+            <a class="button-link secondary" href="/users" target="_blank" rel="noopener noreferrer">查看 /users</a>
           </div>
           <div class="share-grid">
             <div class="field">
@@ -166,7 +314,7 @@ def index():
               <textarea id="inviteUrl" class="copy-box" readonly>{html_escape(invite_url)}</textarea>
               <div class="actions">
                 <button type="button" class="secondary" data-copy-target="inviteUrl">复制授权链接</button>
-                <a href="/invite" target="_blank"><button type="button" class="secondary">预览邀请页</button></a>
+                <a class="button-link secondary" href="/invite" target="_blank" rel="noopener noreferrer">预览邀请页</a>
               </div>
             </div>
             <div class="field">
@@ -205,8 +353,25 @@ def index():
               </div>
               <div class="actions">
                 <button type="button" id="sendInviteBtn">发送授权邀请</button>
+                <button type="button" class="secondary" id="addCaptureTargetBtn">加入抓取用户组</button>
               </div>
               <div class="tiny muted">邀请只用于让对方点击授权；文档搜索仍然只能选择本地已授权用户的 user_key。</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <h2>指定用户内容抓取</h2>
+          <div class="row">
+            <div>
+              <div class="actions">
+                <button type="button" id="runCaptureBtn">立即抓取新增文字记录</button>
+                <button type="button" class="secondary" id="refreshCaptureTargetsBtn">刷新抓取用户组</button>
+              </div>
+              <div class="tiny muted">每日后台会自动搜索用户组内成员新增的“文字记录”文件；需要配置 CAPTURE_TARGET_FOLDER_TOKEN 才会执行复制。</div>
+            </div>
+            <div>
+              <div class="member-list" id="captureTargetList"></div>
             </div>
           </div>
         </div>
@@ -242,12 +407,12 @@ def index():
               <div class="field">
                 <label>当前请求 scope</label>
                 <div>
-                  {''.join(f'<span class="pill">{s}</span>' for s in scope_text.split())}
+                  {''.join(f'<span class="pill">{html_escape(s)}</span>' for s in scope_text.split())}
                 </div>
               </div>
               <div class="field">
                 <label>调试授权链接</label>
-                <textarea readonly>{auth_url}</textarea>
+                <textarea readonly>{html_escape(auth_url)}</textarea>
               </div>
               <div class="tiny muted">首次使用请先点“新增授权用户”，授权成功后再回来搜索。</div>
             </div>
@@ -282,7 +447,7 @@ def index():
 
         <div class="card">
           <h2>搜索结果</h2>
-          <pre id="resultBox">点击“开始搜索”后，这里会显示 JSON 结果。</pre>
+          <div id="resultBox" class="result-box">点击“开始搜索”后，这里会显示 JSON 结果。</div>
         </div>
       </div>
 
@@ -371,7 +536,11 @@ def index():
           try {{
             const res = await fetch('/search?' + params.toString());
             const data = await res.json();
-            box.textContent = JSON.stringify(data, null, 2);
+            if (data.ok) {{
+              renderSearchResults(data);
+            }} else {{
+              box.textContent = JSON.stringify(data, null, 2);
+            }}
           }} catch (err) {{
             box.textContent = '搜索失败：' + err.message;
           }}
@@ -404,6 +573,24 @@ def index():
           }}
         }}
 
+        async function refreshAllUserTokens() {{
+          const box = document.getElementById('resultBox');
+          box.textContent = '正在刷新全部用户 token...';
+          try {{
+            const res = await fetch('/users/refresh-tokens', {{
+              method: 'POST',
+              headers: {{ 'Content-Type': 'application/json' }},
+            }});
+            const data = await res.json();
+            box.textContent = JSON.stringify(data, null, 2);
+            if (data.ok) {{
+              await loadUsers();
+            }}
+          }} catch (err) {{
+            box.textContent = '刷新全部 token 失败：' + err.message;
+          }}
+        }}
+
         function renderInviteUsers(users) {{
           const select = document.getElementById('inviteUserSelect');
           select.innerHTML = '<option value="">请选择一个匹配成员</option>';
@@ -415,6 +602,76 @@ def index():
             opt.textContent = `${{displayName}}${{idText ? ' | ' + idText : ''}}`;
             select.appendChild(opt);
           }});
+        }}
+
+        function getFileToken(file) {{
+          return file.token || file.docs_token || file.doc_token || file.obj_token || file.document_id || file.file_token || '';
+        }}
+
+        function getFileTitle(file, index) {{
+          return file.title || file.name || file.docs_name || file.file_name || `搜索结果 ${{index + 1}}`;
+        }}
+
+        function getFileUrl(file) {{
+          const token = getFileToken(file);
+          return file.url || (token ? `https://gemdalesh.feishu.cn/docx/${{token}}` : '');
+        }}
+
+        function renderSearchResults(data) {{
+          const box = document.getElementById('resultBox');
+          box.innerHTML = '';
+
+          const header = document.createElement('div');
+          header.textContent = `找到 ${{data.count || 0}} 条结果`;
+          box.appendChild(header);
+
+          const files = data.files || [];
+          if (!files.length) {{
+            const empty = document.createElement('div');
+            empty.className = 'muted';
+            empty.textContent = '没有搜索到结果。';
+            box.appendChild(empty);
+          }}
+
+          files.forEach((file, index) => {{
+            const card = document.createElement('div');
+            card.className = 'result-card';
+
+            const title = document.createElement('div');
+            title.className = 'result-title';
+            title.textContent = getFileTitle(file, index);
+            card.appendChild(title);
+
+            const token = getFileToken(file);
+            const meta = document.createElement('div');
+            meta.className = 'result-meta';
+            meta.textContent = token ? `token: ${{token}}` : '未返回 token，无法构建链接';
+            card.appendChild(meta);
+
+            const url = getFileUrl(file);
+            if (url) {{
+              const link = document.createElement('a');
+              link.className = 'result-link';
+              link.href = url;
+              link.target = '_blank';
+              link.rel = 'noopener noreferrer';
+              link.textContent = url;
+              card.appendChild(link);
+            }}
+
+            box.appendChild(card);
+          }});
+
+          const details = document.createElement('details');
+          const summary = document.createElement('summary');
+          summary.textContent = '查看完整 JSON';
+          details.appendChild(summary);
+
+          const json = document.createElement('pre');
+          json.className = 'result-json';
+          json.textContent = JSON.stringify(data, null, 2);
+          details.appendChild(json);
+          box.appendChild(details);
         }}
 
         async function loadInviteContacts() {{
@@ -517,6 +774,115 @@ def index():
           }}
         }}
 
+        function renderCaptureTargets(targets) {{
+          const list = document.getElementById('captureTargetList');
+          list.innerHTML = '';
+          if (!targets.length) {{
+            const empty = document.createElement('div');
+            empty.className = 'tiny muted';
+            empty.textContent = '还没有指定抓取用户，请先在通讯录里搜索并加入。';
+            list.appendChild(empty);
+            return;
+          }}
+
+          targets.forEach((target) => {{
+            const item = document.createElement('div');
+            item.className = 'member-item';
+
+            const main = document.createElement('div');
+            const name = document.createElement('div');
+            name.className = 'member-main';
+            name.textContent = target.name || target.en_name || '未命名用户';
+            const sub = document.createElement('div');
+            sub.className = 'member-sub';
+            sub.textContent = target.open_id || target.user_id || target.target_key || '';
+            main.appendChild(name);
+            main.appendChild(sub);
+
+            const removeBtn = document.createElement('button');
+            removeBtn.type = 'button';
+            removeBtn.className = 'secondary';
+            removeBtn.textContent = '移除';
+            removeBtn.addEventListener('click', () => removeCaptureTarget(target.target_key));
+
+            item.appendChild(main);
+            item.appendChild(removeBtn);
+            list.appendChild(item);
+          }});
+        }}
+
+        async function loadCaptureTargets() {{
+          const box = document.getElementById('resultBox');
+          try {{
+            const res = await fetch('/capture/targets');
+            const data = await res.json();
+            if (!data.ok) {{
+              throw new Error(data.error || '加载抓取用户组失败');
+            }}
+            renderCaptureTargets(data.targets || []);
+          }} catch (err) {{
+            box.textContent = '加载抓取用户组失败：' + err.message;
+          }}
+        }}
+
+        async function addCaptureTargetFromSelectedInviteUser() {{
+          const selectedIndex = document.getElementById('inviteUserSelect').value;
+          const box = document.getElementById('resultBox');
+          const selectedUser = inviteSearchResults[Number(selectedIndex)];
+          if (!selectedUser) {{
+            box.textContent = '请先在通讯录里搜索并选择一个成员。';
+            return;
+          }}
+
+          try {{
+            const res = await fetch('/capture/targets', {{
+              method: 'POST',
+              headers: {{ 'Content-Type': 'application/json' }},
+              body: JSON.stringify({{ user: selectedUser }}),
+            }});
+            const data = await res.json();
+            if (!data.ok) {{
+              throw new Error(data.error || '加入抓取用户组失败');
+            }}
+            box.textContent = JSON.stringify(data, null, 2);
+            await loadCaptureTargets();
+          }} catch (err) {{
+            box.textContent = '加入抓取用户组失败：' + err.message;
+          }}
+        }}
+
+        async function removeCaptureTarget(targetKey) {{
+          const box = document.getElementById('resultBox');
+          try {{
+            const res = await fetch('/capture/targets/' + encodeURIComponent(targetKey), {{
+              method: 'DELETE',
+            }});
+            const data = await res.json();
+            if (!data.ok) {{
+              throw new Error(data.error || '移除抓取用户失败');
+            }}
+            box.textContent = JSON.stringify(data, null, 2);
+            await loadCaptureTargets();
+          }} catch (err) {{
+            box.textContent = '移除抓取用户失败：' + err.message;
+          }}
+        }}
+
+        async function runCaptureNow() {{
+          const box = document.getElementById('resultBox');
+          box.textContent = '正在抓取新增文字记录...';
+          try {{
+            const res = await fetch('/capture/run', {{
+              method: 'POST',
+              headers: {{ 'Content-Type': 'application/json' }},
+            }});
+            const data = await res.json();
+            box.textContent = JSON.stringify(data, null, 2);
+          }} catch (err) {{
+            box.textContent = '抓取失败：' + err.message;
+          }}
+        }}
+
         async function cloneDocumentToFolder() {{
           const userKey = document.getElementById('userSelect').value.trim();
           const sourceDocumentId = document.getElementById('sourceDocumentId').value.trim();
@@ -556,12 +922,48 @@ def index():
           }}
         }}
 
+        async function autoFillCloneTitle() {{
+          const userKey = document.getElementById('userSelect').value.trim();
+          const sourceDocumentId = document.getElementById('sourceDocumentId').value.trim();
+          const titleInput = document.getElementById('cloneTitle');
+
+          if (!userKey || !sourceDocumentId) {{
+            return;
+          }}
+
+          // 如果用户已经手动输入了标题，不要覆盖
+          if (titleInput.value.trim()) {{
+            return;
+          }}
+
+          try {{
+            const params = new URLSearchParams();
+            params.set('user_key', userKey);
+            params.set('source_document_id', sourceDocumentId);
+            const res = await fetch('/docx/minutes-meta?' + params.toString());
+            const data = await res.json();
+            if (data.ok && data.meta && data.meta.suggested_filename) {{
+              titleInput.value = data.meta.suggested_filename;
+            }}
+          }} catch (err) {{
+            // 静默失败，不打扰用户
+            console.error('获取建议标题失败:', err);
+          }}
+        }}
+
+        document.getElementById('sourceDocumentId').addEventListener('blur', autoFillCloneTitle);
+        document.getElementById('userSelect').addEventListener('change', autoFillCloneTitle);
+
         document.getElementById('refreshUsersBtn').addEventListener('click', loadUsers);
         document.getElementById('searchInviteUsersBtn').addEventListener('click', searchInviteUsers);
         document.getElementById('refreshContactsBtn').addEventListener('click', refreshInviteContacts);
         document.getElementById('sendInviteBtn').addEventListener('click', sendInvite);
+        document.getElementById('addCaptureTargetBtn').addEventListener('click', addCaptureTargetFromSelectedInviteUser);
+        document.getElementById('runCaptureBtn').addEventListener('click', runCaptureNow);
+        document.getElementById('refreshCaptureTargetsBtn').addEventListener('click', loadCaptureTargets);
         document.getElementById('searchBtn').addEventListener('click', doSearch);
         document.getElementById('refreshTokenBtn').addEventListener('click', refreshSelectedUserToken);
+        document.getElementById('refreshAllTokensBtn').addEventListener('click', refreshAllUserTokens);
         document.getElementById('cloneDocBtn').addEventListener('click', cloneDocumentToFolder);
         document.getElementById('fillExampleBtn').addEventListener('click', () => {{
           document.getElementById('keyword').value = '文字记录';
@@ -571,21 +973,33 @@ def index():
           btn.addEventListener('click', async () => {{
             const target = document.getElementById(btn.dataset.copyTarget);
             if (!target) return;
-            try {{
-              await navigator.clipboard.writeText(target.value);
-              const oldText = btn.textContent;
+            const oldText = btn.textContent;
+            const markCopied = () => {{
               btn.textContent = '已复制';
               setTimeout(() => {{ btn.textContent = oldText; }}, 1200);
+            }};
+            try {{
+              if (!navigator.clipboard) {{
+                throw new Error('Clipboard API unavailable');
+              }}
+              await navigator.clipboard.writeText(target.value);
+              markCopied();
             }} catch (err) {{
               target.focus();
               target.select();
-              document.execCommand('copy');
+              if (document.execCommand('copy')) {{
+                markCopied();
+              }} else {{
+                btn.textContent = '复制失败';
+                setTimeout(() => {{ btn.textContent = oldText; }}, 1600);
+              }}
             }}
           }});
         }});
 
         loadUsers();
         loadInviteContacts();
+        loadCaptureTargets();
       </script>
     </body>
     </html>
@@ -650,17 +1064,67 @@ def callback():
         return err(str(exc), 500)
 
     granted_scope = token_payload.get("scope", "")
-    return ok(
-        message="授权成功",
-        user_key=user_key,
-        expires_in=token_payload.get("expires_in"),
-        scope=granted_scope,
-        token_type=token_payload.get("token_type"),
-        has_offline_access=("offline_access" in granted_scope.split()),
-        has_drive_search_scope=("drive:drive.search:readonly" in granted_scope.split()),
-        next="/",
-        user_info=user_info,
-    )
+    payload = {
+        "message": "授权成功",
+        "user_key": user_key,
+        "expires_in": token_payload.get("expires_in"),
+        "scope": granted_scope,
+        "token_type": token_payload.get("token_type"),
+        "has_offline_access": ("offline_access" in granted_scope.split()),
+        "has_drive_search_scope": ("drive:drive.search:readonly" in granted_scope.split()),
+        "next": "/",
+        "user_info": user_info,
+    }
+    if request.accept_mimetypes.best == "application/json":
+        return ok(**payload)
+    return f"""
+    <!doctype html>
+    <html lang="zh-CN">
+    <head>
+      <meta charset="utf-8" />
+      <meta name="viewport" content="width=device-width, initial-scale=1" />
+      <title>授权成功</title>
+      <style>
+        body {{
+          margin: 0;
+          min-height: 100vh;
+          display: grid;
+          place-items: center;
+          font-family: Arial, Helvetica, sans-serif;
+          background: #f6f8fb;
+          color: #111827;
+        }}
+        .panel {{
+          width: min(520px, calc(100vw - 32px));
+          background: white;
+          border: 1px solid #dbe3ef;
+          border-radius: 12px;
+          padding: 28px;
+          box-shadow: 0 8px 24px rgba(31, 41, 55, 0.06);
+        }}
+        h1 {{ margin: 0 0 12px; font-size: 26px; }}
+        p {{ margin: 8px 0; color: #4b5563; line-height: 1.7; }}
+        code {{
+          display: inline-block;
+          max-width: 100%;
+          word-break: break-all;
+          background: #f8fafc;
+          border: 1px solid #dbe3ef;
+          border-radius: 8px;
+          padding: 3px 6px;
+          color: #1f2937;
+        }}
+      </style>
+    </head>
+    <body>
+      <div class="panel">
+        <h1>授权成功</h1>
+        <p>{html_escape(user_info.get("name") or "你的飞书账号")} 已完成授权，可以关闭这个页面。</p>
+        <p>授权标识：<code>{html_escape(user_key)}</code></p>
+      </div>
+    </body>
+    </html>
+    """
 
 
 @bp.get("/users")
@@ -676,7 +1140,7 @@ def users():
             "open_id": user_info.get("open_id"),
             "user_id": user_info.get("user_id"),
         })
-    return ok(count=len(summary), users=summary, raw=raw_users)
+    return ok(count=len(summary), users=summary)
 
 
 @bp.post("/invite/search-users")
@@ -787,3 +1251,11 @@ def refresh_user_token():
         refresh_token_expires_at=tokens.get("refresh_token_expires_at"),
         saved_at=tokens.get("saved_at"),
     )
+
+
+@bp.post("/users/refresh-tokens")
+def refresh_all_user_tokens():
+    oauth_service = current_app.extensions["oauth_service"]
+
+    result = oauth_service.refresh_all_access_tokens()
+    return ok(message="all user tokens refreshed", **result)

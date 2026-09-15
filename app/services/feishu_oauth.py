@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 from typing import Any, Dict
 from urllib.parse import urlencode
 
@@ -16,6 +17,8 @@ class FeishuOAuthService:
     def __init__(self, settings: Settings, store: LocalAuthStore):
         self.settings = settings
         self.store = store
+        self._refresh_all_lock = threading.Lock()
+        self._scheduler_started = False
 
     def build_auth_url(self) -> str:
         params = {
@@ -108,6 +111,85 @@ class FeishuOAuthService:
             "user_info": user_record["user_info"],
             "tokens": refreshed,
         }
+
+    def refresh_all_access_tokens(self) -> Dict[str, Any]:
+        """Refresh every locally stored user token and return a non-sensitive summary."""
+        if not self._refresh_all_lock.acquire(blocking=False):
+            return {
+                "refreshed": 0,
+                "failed": 0,
+                "skipped": 0,
+                "results": [],
+                "message": "token refresh is already running",
+            }
+
+        try:
+            users = self.store.list_users()
+            results = []
+            refreshed_count = 0
+            failed_count = 0
+            skipped_count = 0
+
+            for user_key, record in users.items():
+                user_info = record.get("user_info", {})
+                try:
+                    refreshed_record = self.refresh_access_token(user_key)
+                    tokens = refreshed_record["tokens"]
+                    refreshed_count += 1
+                    results.append({
+                        "user_key": user_key,
+                        "name": user_info.get("name"),
+                        "ok": True,
+                        "access_token_expires_at": tokens.get("access_token_expires_at"),
+                        "refresh_token_expires_at": tokens.get("refresh_token_expires_at"),
+                        "saved_at": tokens.get("saved_at"),
+                    })
+                except Exception as exc:  # noqa: BLE001
+                    failed_count += 1
+                    results.append({
+                        "user_key": user_key,
+                        "name": user_info.get("name"),
+                        "ok": False,
+                        "error": str(exc),
+                    })
+
+            if not users:
+                skipped_count = 1
+
+            return {
+                "refreshed": refreshed_count,
+                "failed": failed_count,
+                "skipped": skipped_count,
+                "results": results,
+            }
+        finally:
+            self._refresh_all_lock.release()
+
+    def start_token_refresh_scheduler(self) -> None:
+        if self._scheduler_started:
+            return
+        self._scheduler_started = True
+        thread = threading.Thread(
+            target=self._token_refresh_scheduler_loop,
+            name="feishu-token-refresh-scheduler",
+            daemon=True,
+        )
+        thread.start()
+
+    def _token_refresh_scheduler_loop(self) -> None:
+        if self.settings.token_refresh_startup_refresh:
+            self._safe_refresh_all_access_tokens()
+
+        interval = max(int(self.settings.token_refresh_seconds or 0), 60)
+        while True:
+            threading.Event().wait(interval)
+            self._safe_refresh_all_access_tokens()
+
+    def _safe_refresh_all_access_tokens(self) -> None:
+        try:
+            self.refresh_all_access_tokens()
+        except Exception:
+            return
 
     def _get_user_record(self, user_key: str) -> Dict[str, Any]:
         if not user_key:

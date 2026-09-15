@@ -1,0 +1,15 @@
+services:
+  feishu-oauth-app:
+    build: .
+    container_name: feishu-oauth-app
+    ports:
+      - "8080:8080"
+    env_file:
+      - .env
+    environment:
+      # Must bind to 0.0.0.0 inside container so Docker port forwarding works
+      - APP_HOST=0.0.0.0
+    volumes:
+      # Persist auth_store.json across container restarts
+      - ./data:/app/data
+    restart: unless-stopped

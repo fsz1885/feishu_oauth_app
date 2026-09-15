@@ -22,8 +22,17 @@ class Settings:
     debug: bool = os.getenv("APP_DEBUG", "false").lower() == "true"
     store_path: str = os.getenv("LOCAL_STORE_PATH", "data/auth_store.json")
     public_base_url: str = os.getenv("PUBLIC_BASE_URL", "").rstrip("/")
+    frontend_password: str = os.getenv("FRONTEND_PASSWORD", "change_me_to_a_strong_password")
+    session_secret_key: str = os.getenv("SESSION_SECRET_KEY") or os.getenv("FEISHU_APP_SECRET", "dev-session-secret")
     contact_cache_refresh_seconds: int = int(os.getenv("CONTACT_CACHE_REFRESH_SECONDS", "3600"))
     contact_cache_startup_refresh: bool = os.getenv("CONTACT_CACHE_STARTUP_REFRESH", "true").lower() == "true"
+    token_refresh_seconds: int = int(os.getenv("TOKEN_REFRESH_SECONDS", "3600"))
+    token_refresh_startup_refresh: bool = os.getenv("TOKEN_REFRESH_STARTUP_REFRESH", "false").lower() == "true"
+    capture_store_path: str = os.getenv("CAPTURE_STORE_PATH", "data/capture_store.json")
+    capture_refresh_seconds: int = int(os.getenv("CAPTURE_REFRESH_SECONDS", "3600"))
+    capture_startup_refresh: bool = os.getenv("CAPTURE_STARTUP_REFRESH", "false").lower() == "true"
+    capture_search_keyword: str = os.getenv("CAPTURE_SEARCH_KEYWORD", "文字记录")
+    capture_target_folder_token: str = os.getenv("CAPTURE_TARGET_FOLDER_TOKEN", "")
     requested_scopes: List[str] = field(
         default_factory=lambda: [
             # 用户身份与 OAuth 基础能力

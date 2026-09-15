@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from typing import Any, Dict, List, Optional
 
 import requests
@@ -54,6 +55,69 @@ class FeishuDocxService:
         if content is None:
             content = data.get("raw_content")
         return str(content or "")
+
+    def extract_minutes_meta(
+        self,
+        *,
+        access_token: str,
+        document_id: str,
+        user_name: str,
+    ) -> Dict[str, Any]:
+        """Extract metadata from a Feishu Minutes (妙记) docx and suggest a filename.
+
+        Returns fields like recording_time, theme, and suggested_filename.
+        """
+        content = self.get_raw_content(access_token, document_id)
+
+        # 录音时间：2026年5月17日（周日） 16:47 - 17:06 （GMT+08）
+        time_match = re.search(
+            r"录音时间[：:]\s*(\d{4})年(\d{1,2})月(\d{1,2})日"
+            r"[（(]([^)）]+)[)）]\s*(\d{2}:\d{2})\s*-\s*(\d{2}:\d{2})"
+            r"(?:\s*[（(]([^)）]+)[)）])?",
+            content,
+        )
+
+        # 录音主题：金地楼盘销售信息介绍与讨论
+        theme_match = re.search(r"录音主题[：:]\s*(.+)", content)
+
+        # 文字记录标题（第一行）
+        title_match = re.search(r"文字记录[：:]\s*(.+)", content)
+
+        meta: Dict[str, Any] = {
+            "document_id": document_id,
+            "has_recording_time": bool(time_match),
+            "has_theme": bool(theme_match),
+            "has_title": bool(title_match),
+        }
+
+        if time_match:
+            year, month, day, weekday, start_time, end_time, timezone = time_match.groups()
+            formatted_date = f"{year}-{month.zfill(2)}-{day.zfill(2)}"
+            meta["recording_time"] = {
+                "raw": time_match.group(0).split("\n")[0].strip(),
+                "date": formatted_date,
+                "weekday": weekday,
+                "start_time": start_time,
+                "end_time": end_time,
+                "timezone": timezone or "GMT+08",
+            }
+            safe_name = re.sub(r'[\\/:*?"<>|]', "_", user_name).strip() or "未知用户"
+            meta["suggested_filename"] = f"{safe_name} {formatted_date} {start_time}"
+        else:
+            meta["recording_time"] = None
+            meta["suggested_filename"] = None
+
+        if theme_match:
+            meta["theme"] = theme_match.group(1).strip()
+        else:
+            meta["theme"] = None
+
+        if title_match:
+            meta["title"] = title_match.group(1).strip()
+        else:
+            meta["title"] = None
+
+        return meta
 
     def create_document(
         self,

@@ -48,6 +48,38 @@ def clone_plain_text():
     )
 
 
+@bp.get("/docx/minutes-meta")
+def minutes_meta():
+    oauth_service = current_app.extensions["oauth_service"]
+    docx_service = current_app.extensions["docx_service"]
+
+    user_key = request.args.get("user_key", "").strip()
+    source_document_id = _extract_document_id(
+        str(request.args.get("source_document_id", "")).strip()
+    )
+
+    if not user_key:
+        return err("user_key is required", 400)
+    if not source_document_id:
+        return err("source_document_id is required", 400)
+
+    try:
+        session_record = oauth_service.ensure_valid_access_token(user_key=user_key)
+        meta = docx_service.extract_minutes_meta(
+            access_token=session_record["tokens"]["access_token"],
+            document_id=source_document_id,
+            user_name=session_record.get("user_info", {}).get("name", "未知用户"),
+        )
+    except Exception as exc:  # noqa: BLE001
+        return err(str(exc), 500)
+
+    return ok(
+        user_key=session_record["user_key"],
+        user_name=session_record.get("user_info", {}).get("name"),
+        meta=meta,
+    )
+
+
 def _extract_document_id(value: str) -> str:
     if "/docx/" not in value:
         return value
