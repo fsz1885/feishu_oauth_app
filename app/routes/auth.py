@@ -915,7 +915,7 @@ def index():
                 box.textContent = '抓取进行中… 已等待 ' + ((i + 1) * 3) + ' 秒';
                 continue;
               }}
-              box.textContent = '抓取完成：\n' + JSON.stringify(status.last_run, null, 2);
+              box.textContent = '抓取完成：\\n' + JSON.stringify(status.last_run, null, 2);
               await loadCaptureFailures();
               return;
             }} catch (err) {{ /* keep polling */ }}
