@@ -32,6 +32,9 @@ class Settings:
     capture_store_path: str = os.getenv("CAPTURE_STORE_PATH", "data/capture_store.json")
     capture_refresh_seconds: int = int(os.getenv("CAPTURE_REFRESH_SECONDS", "3600"))
     capture_startup_refresh: bool = os.getenv("CAPTURE_STARTUP_REFRESH", "false").lower() == "true"
+    capture_target_interval_seconds: float = max(
+        float(os.getenv("CAPTURE_TARGET_INTERVAL_SECONDS", "1.0")), 0.0
+    )
     capture_search_keyword: str = os.getenv("CAPTURE_SEARCH_KEYWORD", "文字记录")
     capture_target_folder_token: str = os.getenv("CAPTURE_TARGET_FOLDER_TOKEN", "")
     requested_scopes: List[str] = field(

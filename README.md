@@ -130,6 +130,7 @@ FRONTEND_PASSWORD=你的前端访问密码
 | `TOKEN_REFRESH_STARTUP_REFRESH` | `false` | 启动时是否立即批量刷新 token |
 | `CAPTURE_STORE_PATH` | `data/capture_store.json` | 抓取用户组与运行记录存储路径 |
 | `CAPTURE_REFRESH_SECONDS` | `3600` | 后台自动抓取的间隔（秒，最小 60） |
+| `CAPTURE_TARGET_INTERVAL_SECONDS` | `1.0` | 同一轮内相邻抓取目标之间的间隔（秒），用于降低飞书 API 限流风险，`0` 表示不加间隔 |
 | `CAPTURE_STARTUP_REFRESH` | `false` | 启动时是否立即执行一次抓取 |
 | `CAPTURE_SEARCH_KEYWORD` | `文字记录` | 抓取时搜索文档的关键词 |
 | `CAPTURE_TARGET_FOLDER_TOKEN` | `""` | 抓取结果要复制到的目标文件夹 token（为空则运行抓取会报错） |

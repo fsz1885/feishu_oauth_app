@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import logging
 import re
 import threading
+import time
 from typing import Any, Dict, List, Optional
 
 from app.config import Settings
@@ -10,6 +12,8 @@ from app.services.feishu_oauth import FeishuOAuthService
 from app.services.feishu_search import FeishuSearchService
 from app.storage.capture_store import CaptureStore
 from app.utils.time_utils import iso_now
+
+logger = logging.getLogger(__name__)
 
 
 class ContentCaptureService:
@@ -59,6 +63,7 @@ class ContentCaptureService:
         started_at = iso_now()
         target_folder_token = self.settings.capture_target_folder_token.strip()
         targets = self.capture_store.list_targets()
+        interval_seconds = getattr(self.settings, "capture_target_interval_seconds", 1.0)
         created_count = 0
         skipped_count = 0
         failed_count = 0
@@ -69,23 +74,62 @@ class ContentCaptureService:
             if not target_folder_token:
                 raise RuntimeError("CAPTURE_TARGET_FOLDER_TOKEN is required before running capture")
 
-            for target in targets:
-                # Prefer target's own authorized token; fall back to the
-                # explicitly-specified or default auth user.
-                target_user_key = self._resolve_target_user_key(target) or fallback_user_key
-                session_record = self.oauth_service.ensure_valid_access_token(target_user_key)
-                access_token = session_record["tokens"]["access_token"]
+            logger.info(
+                "capture run started: targets=%d interval=%.1fs fallback_user=%s",
+                len(targets),
+                interval_seconds,
+                fallback_user_key,
+            )
 
-                result = self._capture_target(
-                    access_token=access_token,
-                    target=target,
-                    target_folder_token=target_folder_token,
-                )
-                result["auth_user_key"] = session_record["user_key"]
+            for index, target in enumerate(targets):
+                # Pace requests to reduce the chance of hitting Feishu API rate limits.
+                if index > 0 and interval_seconds > 0:
+                    time.sleep(interval_seconds)
+
+                # Per-target isolation: one broken target (e.g. expired refresh_token)
+                # must not abort the whole run; log it and keep going.
+                try:
+                    target_user_key = self._resolve_target_user_key(target) or fallback_user_key
+                    session_record = self.oauth_service.ensure_valid_access_token(target_user_key)
+                    access_token = session_record["tokens"]["access_token"]
+
+                    result = self._capture_target(
+                        access_token=access_token,
+                        target=target,
+                        target_folder_token=target_folder_token,
+                    )
+                    result["auth_user_key"] = session_record["user_key"]
+                except Exception as exc:  # noqa: BLE001
+                    failed_count += 1
+                    logger.warning(
+                        "capture target failed: target_key=%s name=%s error=%s",
+                        target.get("target_key"),
+                        target.get("name"),
+                        exc,
+                    )
+                    result = {
+                        "target_key": target.get("target_key"),
+                        "name": target.get("name"),
+                        "created": 0,
+                        "skipped": 0,
+                        "failed": 1,
+                        "error": str(exc),
+                        "items": [],
+                    }
+
                 created_count += result["created"]
                 skipped_count += result["skipped"]
                 failed_count += result["failed"]
                 target_results.append(result)
+                logger.info(
+                    "capture target done: target_key=%s name=%s searched=%s created=%s skipped=%s failed=%s",
+                    target.get("target_key"),
+                    target.get("name"),
+                    result.get("searched", 0),
+                    result.get("created", 0),
+                    result.get("skipped", 0),
+                    result.get("failed", 0),
+                )
 
             run = self.capture_store.append_run({
                 "started_at": started_at,
@@ -98,12 +142,20 @@ class ContentCaptureService:
                 "has_target_folder": bool(target_folder_token),
                 "targets": target_results,
             })
+            logger.info(
+                "capture run finished: targets=%d created=%d skipped=%d failed=%d",
+                len(targets),
+                created_count,
+                skipped_count,
+                failed_count,
+            )
             return {
                 "ok": True,
                 **run,
             }
         except Exception as exc:  # noqa: BLE001
             failed_count += 1
+            logger.error("capture run aborted: %s", exc, exc_info=True)
             run = self.capture_store.append_run({
                 "started_at": started_at,
                 "finished_at": iso_now(),
@@ -208,6 +260,12 @@ class ContentCaptureService:
                 items.append({"ok": True, **saved})
             except Exception as exc:  # noqa: BLE001
                 failed_count += 1
+                logger.warning(
+                    "capture file failed: target=%s token=%s error=%s",
+                    target.get("name") or target.get("target_key"),
+                    token,
+                    exc,
+                )
                 items.append({"ok": False, "token": token, "error": str(exc)})
 
         return {

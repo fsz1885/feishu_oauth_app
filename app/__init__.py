@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+
 from flask import Flask
 
 from app.config import Settings
@@ -16,6 +18,11 @@ from app.storage.json_store import LocalAuthStore
 def create_app() -> Flask:
     settings = Settings()
     settings.validate()
+
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
+    )
 
     app = Flask(__name__)
     app.secret_key = settings.session_secret_key
