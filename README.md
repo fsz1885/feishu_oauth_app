@@ -265,10 +265,16 @@ http://localhost:8080/users
 
 ### 第四步：通过接口直接搜索云文档
 
-搜索接口必须显式传入 `user_key`（例如 open_id），不会再默认使用最近一次授权成功的用户，也不会用 `name` 查找用户：
+搜索接口必须显式传入 `user_key`（例如 open_id），不会再默认使用最近一次授权成功的用户，也不会用 `name` 查找用户。默认只返回该用户**名下**的文档（请求侧传 `owner_ids` + 本地按 `owner_id` 二次过滤，因为搜索接口对 `owner_ids` 不保证生效）；结果中每条带 `is_owner` 标注：
 
 ```text
 http://localhost:8080/search?q=项目&user_key=ou_xxx
+```
+
+查看该用户可见的全部文档（含他人创建但共享的）：
+
+```text
+http://localhost:8080/search?q=项目&user_key=ou_xxx&owner_only=false
 ```
 
 指定文档类型：

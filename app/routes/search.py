@@ -29,6 +29,12 @@ def search():
     if not user_key:
         return err("Search requires user_key. Please choose an authorized user.", 400)
 
+    # 仅显示该用户名下的文件：默认开启；传 owner_only=false/0 关闭
+    # 请求侧传 owner_ids，返回侧本地兜底过滤
+    # （搜索接口对 owner_ids 不保证生效，可能返回别人共享的文档）
+    owner_only_raw = request.args.get("owner_only", "1").strip().lower()
+    owner_only = owner_only_raw not in ("0", "false", "no")
+
     try:
         session_record = oauth_service.ensure_valid_access_token(
             user_key=user_key,
@@ -37,10 +43,16 @@ def search():
             access_token=session_record["tokens"]["access_token"],
             keyword=keyword,
             docs_types=docs_types,
+            owner_ids=[user_key] if owner_only else None,
             count=50,
             max_pages=4,
         )
+        total_before_owner_filter = len(files)
         files = [_with_docx_link(file) for file in files]
+        for file in files:
+            file["is_owner"] = str(file.get("owner_id") or "").strip() == user_key
+        if owner_only:
+            files = [file for file in files if file["is_owner"]]
     except Exception as exc:  # noqa: BLE001
         return err(str(exc), 500)
 
@@ -50,6 +62,8 @@ def search():
         user_name=session_record.get("user_info", {}).get("name"),
         token_scope=session_record["tokens"].get("scope"),
         refreshed_until=session_record["tokens"].get("access_token_expires_at"),
+        owner_filter_applied=owner_only,
+        total_before_owner_filter=total_before_owner_filter,
         count=len(files),
         files=files,
     )

@@ -408,6 +408,10 @@ def index():
                 <input id="docsTypes" type="text" placeholder="例如：doc,sheet" />
                 <div class="tiny muted">可选：doc / sheet / slides / bitable / mindnote / file</div>
               </div>
+              <label style="display:flex;align-items:center;gap:8px;font-weight:400;margin-bottom:12px;">
+                <input type="checkbox" id="ownerOnlyFilter" style="width:auto;" checked />
+                <span class="tiny">仅显示该用户名下的文件（过滤掉别人创建但共享可见的文档）</span>
+              </label>
               <div class="actions">
                 <button type="button" id="searchBtn">开始搜索</button>
                 <button type="button" class="secondary" id="refreshTokenBtn">刷新当前用户 token</button>
@@ -544,6 +548,7 @@ def index():
           const q = document.getElementById('keyword').value.trim();
           const docsTypes = document.getElementById('docsTypes').value.trim();
           const userKey = document.getElementById('userSelect').value.trim();
+          const ownerOnly = document.getElementById('ownerOnlyFilter').checked;
           const box = document.getElementById('resultBox');
 
           if (!q) {{
@@ -559,6 +564,7 @@ def index():
           params.set('q', q);
           if (docsTypes) params.set('docs_types', docsTypes);
           params.set('user_key', userKey);
+          if (ownerOnly) params.set('owner_only', '1');
 
           box.textContent = '搜索中...';
           try {{
@@ -650,7 +656,11 @@ def index():
           box.innerHTML = '';
 
           const header = document.createElement('div');
-          header.textContent = `找到 ${{data.count || 0}} 条结果`;
+          let headerText = `找到 ${{data.count || 0}} 条结果`;
+          if (data.owner_filter_applied) {{
+            headerText = headerText + `（该用户名下；过滤前 ${{data.total_before_owner_filter || 0}} 条，已剔除他人共享的 ${{(data.total_before_owner_filter || 0) - (data.count || 0)}} 条）`;
+          }}
+          header.textContent = headerText;
           box.appendChild(header);
 
           const files = data.files || [];
