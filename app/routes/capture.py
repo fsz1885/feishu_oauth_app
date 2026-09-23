@@ -51,3 +51,59 @@ def list_runs():
     capture_service = current_app.extensions["capture_service"]
     runs = capture_service.list_runs()
     return ok(count=len(runs), runs=runs)
+
+
+@bp.get("/capture/failures")
+def list_failures():
+    """Flatten recent capture failures (run-level, target-level, file-level) for admins."""
+    capture_service = current_app.extensions["capture_service"]
+    try:
+        limit = max(1, min(int(request.args.get("limit", 5)), 20))
+    except (TypeError, ValueError):
+        limit = 5
+
+    runs_with_failures = []
+    for run in capture_service.list_runs():
+        failures = []
+
+        if run.get("error"):
+            failures.append({
+                "scope": "run",
+                "target_name": "整轮抓取",
+                "error": run["error"],
+            })
+
+        for target in run.get("targets", []):
+            target_name = target.get("name") or target.get("target_key") or "未知目标"
+            if target.get("error"):
+                failures.append({
+                    "scope": "target",
+                    "target_name": target_name,
+                    "error": target["error"],
+                })
+            for item in target.get("items", []):
+                if item.get("ok") is False and not item.get("skipped"):
+                    failures.append({
+                        "scope": "file",
+                        "target_name": target_name,
+                        "token": item.get("token") or "",
+                        "title": item.get("source_title") or item.get("title") or "",
+                        "error": item.get("error") or "unknown error",
+                    })
+
+        if failures:
+            runs_with_failures.append({
+                "run_started_at": run.get("started_at"),
+                "run_finished_at": run.get("finished_at"),
+                "summary": (
+                    f"targets={run.get('target_count', 0)} "
+                    f"created={run.get('created', 0)} "
+                    f"skipped={run.get('skipped', 0)} "
+                    f"failed={run.get('failed', 0)}"
+                ),
+                "failures": failures,
+            })
+        if len(runs_with_failures) >= limit:
+            break
+
+    return ok(count=len(runs_with_failures), runs_with_failures=runs_with_failures)

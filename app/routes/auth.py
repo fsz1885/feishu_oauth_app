@@ -379,6 +379,11 @@ def index():
               <div class="member-list" id="captureTargetList"></div>
             </div>
           </div>
+          <div class="actions" style="margin-top:14px;">
+            <button type="button" class="secondary" id="refreshCaptureFailuresBtn">刷新失败记录</button>
+          </div>
+          <div class="tiny muted">最近几轮抓取的失败明细（整轮 / 目标 / 单文件），便于管理员发现异常；完整历史可看 /capture/runs。</div>
+          <div class="member-list" id="captureFailureList"></div>
         </div>
 
         <div class="card">
@@ -883,8 +888,62 @@ def index():
             }});
             const data = await res.json();
             box.textContent = JSON.stringify(data, null, 2);
+            await loadCaptureFailures();
           }} catch (err) {{
             box.textContent = '抓取失败：' + err.message;
+          }}
+        }}
+
+        function renderCaptureFailures(runs) {{
+          const list = document.getElementById('captureFailureList');
+          list.innerHTML = '';
+          if (!runs || !runs.length) {{
+            const empty = document.createElement('div');
+            empty.className = 'tiny muted';
+            empty.textContent = '最近几轮抓取没有失败记录。';
+            list.appendChild(empty);
+            return;
+          }}
+          runs.forEach((run) => {{
+            const head = document.createElement('div');
+            head.className = 'tiny muted';
+            head.textContent = '轮次 ' + (run.run_started_at || '') + ' ｜ ' + (run.summary || '');
+            list.appendChild(head);
+            (run.failures || []).forEach((f) => {{
+              const item = document.createElement('div');
+              item.className = 'member-item';
+              const main = document.createElement('div');
+              const name = document.createElement('div');
+              name.className = 'member-main';
+              let label = '[' + (f.scope || '?') + '] ' + (f.target_name || '');
+              if (f.title) {{ label = label + ' — ' + f.title; }}
+              name.textContent = label;
+              const sub = document.createElement('div');
+              sub.className = 'member-sub';
+              sub.textContent = f.error || '';
+              main.appendChild(name);
+              main.appendChild(sub);
+              item.appendChild(main);
+              list.appendChild(item);
+            }});
+          }});
+        }}
+
+        async function loadCaptureFailures() {{
+          const list = document.getElementById('captureFailureList');
+          try {{
+            const res = await fetch('/capture/failures?limit=5');
+            const data = await res.json();
+            if (!data.ok) {{
+              throw new Error(data.error || '加载失败记录失败');
+            }}
+            renderCaptureFailures(data.runs_with_failures || []);
+          }} catch (err) {{
+            list.innerHTML = '';
+            const empty = document.createElement('div');
+            empty.className = 'tiny muted';
+            empty.textContent = '加载失败记录失败：' + err.message;
+            list.appendChild(empty);
           }}
         }}
 
@@ -966,6 +1025,7 @@ def index():
         document.getElementById('addCaptureTargetBtn').addEventListener('click', addCaptureTargetFromSelectedInviteUser);
         document.getElementById('runCaptureBtn').addEventListener('click', runCaptureNow);
         document.getElementById('refreshCaptureTargetsBtn').addEventListener('click', loadCaptureTargets);
+        document.getElementById('refreshCaptureFailuresBtn').addEventListener('click', loadCaptureFailures);
         document.getElementById('searchBtn').addEventListener('click', doSearch);
         document.getElementById('refreshTokenBtn').addEventListener('click', refreshSelectedUserToken);
         document.getElementById('refreshAllTokensBtn').addEventListener('click', refreshAllUserTokens);
@@ -1005,6 +1065,7 @@ def index():
         loadUsers();
         loadInviteContacts();
         loadCaptureTargets();
+        loadCaptureFailures();
       </script>
     </body>
     </html>

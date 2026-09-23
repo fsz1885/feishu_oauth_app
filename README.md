@@ -500,7 +500,7 @@ data/auth_store.json
 1. 从 `capture_store.json` 读取抓取用户组（targets）
 2. 对每个目标用户：
    - 优先使用该用户本人在本地的 OAuth token，否则回退到默认已授权用户
-   - 以 `CAPTURE_SEARCH_KEYWORD`（默认“文字记录”）为关键词、以该用户为 owner 搜索 doc/docx 文档
+   - 以 `CAPTURE_SEARCH_KEYWORD`（默认“文字记录”）为关键词、以该用户为 owner 搜索 doc/docx 文档（搜索接口的 owner 过滤对 user token 不可靠，程序会在本地按 owner_id 二次过滤）
    - 跳过标题不含“文字记录”或已处理过的文件
 3. 对每个新文件：
    - 读取 `raw_content`，从文档头部解析录制时间，生成 `姓名_yyyyMMdd_HHmm` 标题

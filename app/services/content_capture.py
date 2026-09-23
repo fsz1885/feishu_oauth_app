@@ -212,6 +212,21 @@ class ContentCaptureService:
             max_pages=2,
         )
 
+        # The search API's owner_ids param is not reliable with user tokens
+        # (results may include docs owned by others), so filter locally.
+        if owner_id:
+            raw_count = len(files)
+            files = [
+                file for file in files
+                if str(file.get("owner_id") or "").strip() == str(owner_id)
+            ]
+            logger.info(
+                "capture owner filter: target=%s searched=%d owner_matched=%d",
+                target.get("name") or target.get("target_key"),
+                raw_count,
+                len(files),
+            )
+
         items: List[Dict[str, Any]] = []
         created_count = 0
         skipped_count = 0
