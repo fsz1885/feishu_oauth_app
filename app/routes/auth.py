@@ -896,17 +896,48 @@ def index():
           }}
         }}
 
+        function fmtBeijingTime(iso) {{
+          if (!iso) {{ return ''; }}
+          const d = new Date(iso);
+          if (isNaN(d.getTime())) {{ return iso; }}
+          return d.toLocaleString('zh-CN', {{ timeZone: 'Asia/Shanghai', hour12: false }});
+        }}
+
+        async function pollCaptureStatus(box) {{
+          const maxPolls = 600; // 最多轮询 30 分钟
+          for (let i = 0; i < maxPolls; i++) {{
+            await new Promise((resolve) => setTimeout(resolve, 3000));
+            try {{
+              const res = await fetch('/capture/status');
+              const status = await res.json();
+              if (!status.ok) {{ continue; }}
+              if (status.running) {{
+                box.textContent = '抓取进行中… 已等待 ' + ((i + 1) * 3) + ' 秒';
+                continue;
+              }}
+              box.textContent = '抓取完成：\n' + JSON.stringify(status.last_run, null, 2);
+              await loadCaptureFailures();
+              return;
+            }} catch (err) {{ /* keep polling */ }}
+          }}
+          box.textContent = '轮询超时（30 分钟），抓取可能仍在后台运行，可稍后查看失败记录。';
+        }}
+
         async function runCaptureNow() {{
           const box = document.getElementById('resultBox');
-          box.textContent = '正在抓取新增文字记录...';
+          box.textContent = '抓取已启动，每 3 秒轮询一次状态…';
           try {{
             const res = await fetch('/capture/run', {{
               method: 'POST',
               headers: {{ 'Content-Type': 'application/json' }},
+              body: '{{}}',
             }});
             const data = await res.json();
-            box.textContent = JSON.stringify(data, null, 2);
-            await loadCaptureFailures();
+            if (!data.ok) {{
+              box.textContent = JSON.stringify(data, null, 2);
+              return;
+            }}
+            await pollCaptureStatus(box);
           }} catch (err) {{
             box.textContent = '抓取失败：' + err.message;
           }}
@@ -931,7 +962,7 @@ def index():
             const option = document.createElement('option');
             option.value = String(index);
             const count = (run.failures || []).length;
-            option.textContent = (run.run_started_at || '').slice(5, 19) + ' ｜ 失败 ' + count + ' 条';
+            option.textContent = fmtBeijingTime(run.run_started_at).slice(5) + ' ｜ 失败 ' + count + ' 条';
             select.appendChild(option);
           }});
         }}
@@ -954,7 +985,7 @@ def index():
 
           const head = document.createElement('div');
           head.className = 'tiny muted';
-          head.textContent = (run.run_started_at || '') + ' ｜ ' + (run.summary || '');
+          head.textContent = fmtBeijingTime(run.run_started_at) + ' ｜ ' + (run.summary || '');
           list.appendChild(head);
 
           failures.slice(0, limit).forEach((f) => {{

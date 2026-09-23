@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import threading
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -8,11 +9,17 @@ from app.utils.time_utils import iso_now
 
 
 class CaptureStore:
-    """JSON store for target contacts and processed recording docs."""
+    """JSON store for target contacts and processed recording docs.
+
+    All read-modify-write cycles are serialized with an RLock so the capture
+    scheduler thread and HTTP request threads cannot clobber each other.
+    """
 
     def __init__(self, file_path: str):
         self.file_path = Path(file_path)
         self.file_path.parent.mkdir(parents=True, exist_ok=True)
+        self._lock = threading.RLock()
+        self._processed_keys: Optional[set] = None
         if not self.file_path.exists():
             self._write(self._empty())
 
@@ -62,47 +69,60 @@ class CaptureStore:
             "mobile": user.get("mobile") or "",
             "added_at": iso_now(),
         }
-        data = self._read()
-        existing = data["targets"].get(target_key, {})
-        if existing.get("added_at"):
-            record["added_at"] = existing["added_at"]
-        record["updated_at"] = iso_now()
-        data["targets"][target_key] = record
-        self._write(data)
+        with self._lock:
+            data = self._read()
+            existing = data["targets"].get(target_key, {})
+            if existing.get("added_at"):
+                record["added_at"] = existing["added_at"]
+            record["updated_at"] = iso_now()
+            data["targets"][target_key] = record
+            self._write(data)
         return record
 
     def delete_target(self, target_key: str) -> bool:
-        data = self._read()
-        existed = target_key in data["targets"]
-        data["targets"].pop(target_key, None)
-        self._write(data)
-        return existed
+        with self._lock:
+            data = self._read()
+            existed = target_key in data["targets"]
+            data["targets"].pop(target_key, None)
+            self._write(data)
+            return existed
 
     def get_processed(self, file_key: str) -> Optional[Dict[str, Any]]:
-        return self._read().get("processed_files", {}).get(file_key)
+        with self._lock:
+            if self._processed_keys is None:
+                self._processed_keys = set(self._read().get("processed_files", {}).keys())
+            if file_key not in self._processed_keys:
+                return None
+            return self._read().get("processed_files", {}).get(file_key)
 
     def mark_processed(self, file_key: str, record: Dict[str, Any]) -> Dict[str, Any]:
-        data = self._read()
-        saved = {
-            **record,
-            "file_key": file_key,
-            "processed_at": iso_now(),
-        }
-        data["processed_files"][file_key] = saved
-        self._write(data)
-        return saved
+        with self._lock:
+            data = self._read()
+            saved = {
+                **record,
+                "file_key": file_key,
+                "processed_at": iso_now(),
+            }
+            data["processed_files"][file_key] = saved
+            if self._processed_keys is None:
+                self._processed_keys = set(data["processed_files"].keys())
+            else:
+                self._processed_keys.add(file_key)
+            self._write(data)
+            return saved
 
     def append_run(self, record: Dict[str, Any]) -> Dict[str, Any]:
-        data = self._read()
-        saved = {
-            **record,
-            "run_at": iso_now(),
-        }
-        runs = data.setdefault("runs", [])
-        runs.append(saved)
-        data["runs"] = runs[-50:]
-        self._write(data)
-        return saved
+        with self._lock:
+            data = self._read()
+            saved = {
+                **record,
+                "run_at": iso_now(),
+            }
+            runs = data.setdefault("runs", [])
+            runs.append(saved)
+            data["runs"] = runs[-50:]
+            self._write(data)
+            return saved
 
     def list_runs(self) -> List[Dict[str, Any]]:
         return list(reversed(self._read().get("runs", [])))
@@ -112,25 +132,26 @@ class CaptureStore:
         return str(value) if value else None
 
     def set_setting(self, key: str, value: str, *, changed_by: str = "frontend") -> Dict[str, Any]:
-        data = self._read()
-        previous = data.get("settings", {}).get(key)
-        data.setdefault("settings", {})[key] = value
-        history = data.setdefault("settings_history", [])
-        history.append({
-            "key": key,
-            "changed_by": changed_by,
-            "changed_at": iso_now(),
-            "previous": self.mask_token(str(previous)) if previous else None,
-            "current": self.mask_token(value),
-        })
-        data["settings_history"] = history[-50:]
-        self._write(data)
-        return {
-            "key": key,
-            "previous_masked": self.mask_token(str(previous)) if previous else None,
-            "current_masked": self.mask_token(value),
-            "changed_at": iso_now(),
-        }
+        with self._lock:
+            data = self._read()
+            previous = data.get("settings", {}).get(key)
+            data.setdefault("settings", {})[key] = value
+            history = data.setdefault("settings_history", [])
+            history.append({
+                "key": key,
+                "changed_by": changed_by,
+                "changed_at": iso_now(),
+                "previous": self.mask_token(str(previous)) if previous else None,
+                "current": self.mask_token(value),
+            })
+            data["settings_history"] = history[-50:]
+            self._write(data)
+            return {
+                "key": key,
+                "previous_masked": self.mask_token(str(previous)) if previous else None,
+                "current_masked": self.mask_token(value),
+                "changed_at": iso_now(),
+            }
 
     @staticmethod
     def mask_token(value: Optional[str]) -> Optional[str]:

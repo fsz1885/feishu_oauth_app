@@ -383,6 +383,14 @@ curl -X POST http://localhost:8080/capture/run \
   -d '{}'
 ```
 
+默认**异步执行**：接口立即返回 `capture started`，进度与结果通过 `GET /capture/status` 查询（running 标志 / 最近一轮摘要 / 连续失败次数，可作为监控告警挂点），前端会自动轮询。需要同步等待完整结果可传 `{"sync": true}`。
+
+#### 8.2.1 查询抓取状态
+
+```bash
+curl http://localhost:8080/capture/status
+```
+
 #### 8.3 查看历史抓取记录
 
 ```text

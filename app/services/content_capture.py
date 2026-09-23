@@ -35,6 +35,7 @@ class ContentCaptureService:
         self.search_service = search_service
         self.docx_service = docx_service
         self._run_lock = threading.Lock()
+        self._running = False
         self._scheduler_started = False
 
     def list_targets(self) -> List[Dict[str, Any]]:
@@ -60,13 +61,17 @@ class ContentCaptureService:
                 "failed": 0,
             }
 
+        self._running = True
         started_at = iso_now()
+        started_monotonic = time.monotonic()
         target_folder_token = self.target_folder_token()
         targets = self.capture_store.list_targets()
         interval_seconds = getattr(self.settings, "capture_target_interval_seconds", 1.0)
         created_count = 0
         skipped_count = 0
         failed_count = 0
+        search_group_count = 0
+        files_examined = 0
         target_results: List[Dict[str, Any]] = []
 
         try:
@@ -74,68 +79,137 @@ class ContentCaptureService:
             if not target_folder_token:
                 raise RuntimeError("CAPTURE_TARGET_FOLDER_TOKEN is required before running capture")
 
+            # Group targets by the token that will actually be used, so each
+            # token searches the keyword ONCE instead of once per target —
+            # the single biggest API-load reduction for many targets.
+            groups: Dict[str, List[Dict[str, Any]]] = {}
+            for target in targets:
+                group_key = self._resolve_target_user_key(target) or fallback_user_key
+                groups.setdefault(group_key, []).append(target)
+
             logger.info(
-                "capture run started: targets=%d interval=%.1fs fallback_user=%s",
+                "capture run started: targets=%d groups=%d interval=%.1fs fallback_user=%s",
                 len(targets),
+                len(groups),
                 interval_seconds,
                 fallback_user_key,
             )
 
-            for index, target in enumerate(targets):
-                # Pace requests to reduce the chance of hitting Feishu API rate limits.
-                if index > 0 and interval_seconds > 0:
+            for group_index, (group_key, group_targets) in enumerate(groups.items()):
+                # Pace between token groups as well.
+                if group_index > 0 and interval_seconds > 0:
                     time.sleep(interval_seconds)
 
-                # Per-target isolation: one broken target (e.g. expired refresh_token)
-                # must not abort the whole run; log it and keep going.
+                # Group-level isolation: token refresh / search failures only
+                # affect the targets inside this group.
                 try:
-                    target_user_key = self._resolve_target_user_key(target) or fallback_user_key
-                    session_record = self.oauth_service.ensure_valid_access_token(target_user_key)
+                    session_record = self.oauth_service.ensure_valid_access_token(group_key)
                     access_token = session_record["tokens"]["access_token"]
-
-                    result = self._capture_target(
+                    group_files = self.search_service.search_docs(
                         access_token=access_token,
-                        target=target,
-                        target_folder_token=target_folder_token,
+                        keyword=self.settings.capture_search_keyword,
+                        docs_types=["doc", "docx"],
+                        count=50,
+                        max_pages=4,
                     )
-                    result["auth_user_key"] = session_record["user_key"]
+                    search_group_count += 1
+                    files_by_owner: Dict[str, List[Dict[str, Any]]] = {}
+                    for file in group_files:
+                        owner = str(file.get("owner_id") or "").strip()
+                        if owner:
+                            files_by_owner.setdefault(owner, []).append(file)
+                    logger.info(
+                        "capture group searched: auth_user=%s files=%d owners=%d",
+                        session_record["user_key"],
+                        len(group_files),
+                        len(files_by_owner),
+                    )
                 except Exception as exc:  # noqa: BLE001
-                    failed_count += 1
+                    failed_count += len(group_targets)
                     logger.warning(
-                        "capture target failed: target_key=%s name=%s error=%s",
-                        target.get("target_key"),
-                        target.get("name"),
+                        "capture group failed: auth_user_key=%s targets=%d error=%s",
+                        group_key,
+                        len(group_targets),
                         exc,
                     )
-                    result = {
-                        "target_key": target.get("target_key"),
-                        "name": target.get("name"),
-                        "created": 0,
-                        "skipped": 0,
-                        "failed": 1,
-                        "error": str(exc),
-                        "items": [],
-                    }
+                    for target in group_targets:
+                        target_results.append({
+                            "target_key": target.get("target_key"),
+                            "name": target.get("name"),
+                            "created": 0,
+                            "skipped": 0,
+                            "failed": 1,
+                            "error": str(exc),
+                            "items": [],
+                        })
+                    continue
 
-                created_count += result["created"]
-                skipped_count += result["skipped"]
-                failed_count += result["failed"]
-                target_results.append(result)
-                logger.info(
-                    "capture target done: target_key=%s name=%s searched=%s created=%s skipped=%s failed=%s",
-                    target.get("target_key"),
-                    target.get("name"),
-                    result.get("searched", 0),
-                    result.get("created", 0),
-                    result.get("skipped", 0),
-                    result.get("failed", 0),
-                )
+                for target_index, target in enumerate(group_targets):
+                    # Pace requests to reduce the chance of hitting Feishu API rate limits.
+                    if target_index > 0 and interval_seconds > 0:
+                        time.sleep(interval_seconds)
 
+                    # Files are already partitioned by owner at group level;
+                    # this is also the reliable local owner filter (the search
+                    # API silently ignores invalid owner_ids).
+                    owner_id = str(
+                        target.get("open_id") or target.get("user_id") or target.get("target_key") or ""
+                    ).strip()
+                    files = files_by_owner.get(owner_id, [])
+                    files_examined += len(files)
+
+                    # Per-target isolation: one broken target (e.g. expired refresh_token)
+                    # must not abort the whole run; log it and keep going.
+                    try:
+                        result = self._capture_target(
+                            access_token=access_token,
+                            target=target,
+                            target_folder_token=target_folder_token,
+                            files=files,
+                        )
+                        result["auth_user_key"] = session_record["user_key"]
+                    except Exception as exc:  # noqa: BLE001
+                        failed_count += 1
+                        logger.warning(
+                            "capture target failed: target_key=%s name=%s error=%s",
+                            target.get("target_key"),
+                            target.get("name"),
+                            exc,
+                        )
+                        result = {
+                            "target_key": target.get("target_key"),
+                            "name": target.get("name"),
+                            "created": 0,
+                            "skipped": 0,
+                            "failed": 1,
+                            "error": str(exc),
+                            "items": [],
+                        }
+
+                    created_count += result["created"]
+                    skipped_count += result["skipped"]
+                    failed_count += result["failed"]
+                    target_results.append(result)
+                    logger.info(
+                        "capture target done: target_key=%s name=%s searched=%s created=%s skipped=%s failed=%s",
+                        target.get("target_key"),
+                        target.get("name"),
+                        result.get("searched", 0),
+                        result.get("created", 0),
+                        result.get("skipped", 0),
+                        result.get("failed", 0),
+                    )
+
+            duration_ms = int((time.monotonic() - started_monotonic) * 1000)
             run = self.capture_store.append_run({
+                "ok": True,
                 "started_at": started_at,
                 "finished_at": iso_now(),
+                "duration_ms": duration_ms,
                 "fallback_user_key": fallback_user_key,
                 "target_count": len(targets),
+                "search_group_count": search_group_count,
+                "files_examined": files_examined,
                 "created": created_count,
                 "skipped": skipped_count,
                 "failed": failed_count,
@@ -143,11 +217,13 @@ class ContentCaptureService:
                 "targets": target_results,
             })
             logger.info(
-                "capture run finished: targets=%d created=%d skipped=%d failed=%d",
+                "capture run finished: targets=%d groups=%d created=%d skipped=%d failed=%d duration_ms=%d",
                 len(targets),
+                search_group_count,
                 created_count,
                 skipped_count,
                 failed_count,
+                duration_ms,
             )
             return {
                 "ok": True,
@@ -155,10 +231,13 @@ class ContentCaptureService:
             }
         except Exception as exc:  # noqa: BLE001
             failed_count += 1
+            duration_ms = int((time.monotonic() - started_monotonic) * 1000)
             logger.error("capture run aborted: %s", exc, exc_info=True)
             run = self.capture_store.append_run({
+                "ok": False,
                 "started_at": started_at,
                 "finished_at": iso_now(),
+                "duration_ms": duration_ms,
                 "target_count": len(targets),
                 "created": created_count,
                 "skipped": skipped_count,
@@ -171,7 +250,58 @@ class ContentCaptureService:
                 **run,
             }
         finally:
+            self._running = False
             self._run_lock.release()
+
+    def start_capture_async(self, *, user_key: Optional[str] = None) -> Dict[str, Any]:
+        """Kick off a capture run in a background thread; return immediately."""
+        if self._running or self._run_lock.locked():
+            return {"started": False, "message": "capture is already running"}
+        thread = threading.Thread(
+            target=self._safe_run_capture,
+            args=(user_key,),
+            name="content-capture-manual",
+            daemon=True,
+        )
+        thread.start()
+        return {"started": True, "message": "capture started"}
+
+    def is_running(self) -> bool:
+        return bool(self._running)
+
+    def capture_status(self) -> Dict[str, Any]:
+        """Lightweight status for monitoring: running flag + recent run health."""
+        runs = self.capture_store.list_runs()
+        consecutive_failures = 0
+        last_success_at = None
+        for run in runs:
+            ok = run.get("ok")
+            if ok is None:
+                ok = not run.get("error")
+            if ok:
+                last_success_at = run.get("started_at")
+                break
+            consecutive_failures += 1
+
+        last_run = runs[0] if runs else None
+        summary = None
+        if last_run:
+            summary = {
+                "run_started_at": last_run.get("started_at"),
+                "ok": bool(last_run.get("ok", not last_run.get("error"))),
+                "target_count": last_run.get("target_count"),
+                "created": last_run.get("created"),
+                "skipped": last_run.get("skipped"),
+                "failed": last_run.get("failed"),
+                "duration_ms": last_run.get("duration_ms"),
+                "error": last_run.get("error"),
+            }
+        return {
+            "running": self.is_running(),
+            "consecutive_failures": consecutive_failures,
+            "last_success_at": last_success_at,
+            "last_run": summary,
+        }
 
     def start_scheduler(self) -> None:
         if self._scheduler_started:
@@ -189,9 +319,9 @@ class ContentCaptureService:
             threading.Event().wait(interval)
             self._safe_run_capture()
 
-    def _safe_run_capture(self) -> None:
+    def _safe_run_capture(self, user_key: Optional[str] = None) -> None:
         try:
-            self.run_capture()
+            self.run_capture(user_key=user_key)
         except Exception:
             return
 
@@ -201,32 +331,8 @@ class ContentCaptureService:
         access_token: str,
         target: Dict[str, Any],
         target_folder_token: str,
+        files: List[Dict[str, Any]],
     ) -> Dict[str, Any]:
-        owner_id = target.get("open_id") or target.get("user_id") or target.get("target_key")
-        files = self.search_service.search_docs(
-            access_token=access_token,
-            keyword=self.settings.capture_search_keyword,
-            docs_types=["doc", "docx"],
-            owner_ids=[owner_id] if owner_id else None,
-            count=20,
-            max_pages=2,
-        )
-
-        # The search API's owner_ids param is not reliable with user tokens
-        # (results may include docs owned by others), so filter locally.
-        if owner_id:
-            raw_count = len(files)
-            files = [
-                file for file in files
-                if str(file.get("owner_id") or "").strip() == str(owner_id)
-            ]
-            logger.info(
-                "capture owner filter: target=%s searched=%d owner_matched=%d",
-                target.get("name") or target.get("target_key"),
-                raw_count,
-                len(files),
-            )
-
         items: List[Dict[str, Any]] = []
         created_count = 0
         skipped_count = 0

@@ -60,10 +60,26 @@ def run_capture():
     capture_service = current_app.extensions["capture_service"]
     payload = request.get_json(silent=True) or {}
     user_key = str(payload.get("user_key") or request.form.get("user_key") or "").strip() or None
-    result = capture_service.run_capture(user_key=user_key)
-    if not result.get("ok"):
-        return err(result.get("error") or result.get("message") or "capture failed", 500, result=result)
-    return ok(message="capture finished", result=result)
+    sync_mode = payload.get("sync") is True or request.args.get("sync") == "true"
+
+    if sync_mode:
+        result = capture_service.run_capture(user_key=user_key)
+        if not result.get("ok"):
+            return err(result.get("error") or result.get("message") or "capture failed", 500, result=result)
+        return ok(message="capture finished", result=result)
+
+    # Default: run asynchronously so long runs cannot hit gateway timeouts.
+    started = capture_service.start_capture_async(user_key=user_key)
+    if not started.get("started"):
+        return err(started.get("message") or "capture is already running", 409, status=capture_service.capture_status())
+    return ok(message="capture started", status=capture_service.capture_status())
+
+
+@bp.get("/capture/status")
+def capture_status():
+    """Monitoring hook: running flag, last run summary, consecutive failures."""
+    capture_service = current_app.extensions["capture_service"]
+    return ok(**capture_service.capture_status())
 
 
 @bp.get("/capture/runs")
