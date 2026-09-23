@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-import json
-from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from app.storage.atomic_json import AtomicJsonStore
+from app.utils.time_utils import iso_now
 
-class LocalAuthStore:
+
+class LocalAuthStore(AtomicJsonStore):
     """Simple JSON file store for local development.
 
     Structure:
@@ -21,39 +22,32 @@ class LocalAuthStore:
     """
 
     def __init__(self, file_path: str):
-        self.file_path = Path(file_path)
-        self.file_path.parent.mkdir(parents=True, exist_ok=True)
-        if not self.file_path.exists():
-            self._write({"latest_user_key": None, "users": {}})
+        super().__init__(file_path, self._empty)
 
-    def _read(self) -> Dict[str, Any]:
-        if not self.file_path.exists():
-            return {"latest_user_key": None, "users": {}}
-        with self.file_path.open("r", encoding="utf-8") as f:
-            return json.load(f)
-
-    def _write(self, data: Dict[str, Any]) -> None:
-        with self.file_path.open("w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
+    @staticmethod
+    def _empty() -> Dict[str, Any]:
+        return {"latest_user_key": None, "users": {}}
 
     def upsert_user(self, user_key: str, *, user_info: Dict[str, Any], tokens: Dict[str, Any]) -> None:
-        data = self._read()
-        users = data.setdefault("users", {})
-        users[user_key] = {
-            "user_info": user_info,
-            "tokens": tokens,
-        }
-        data["latest_user_key"] = user_key
-        self._write(data)
+        with self._lock:
+            data = self._read()
+            users = data.setdefault("users", {})
+            users[user_key] = {
+                "user_info": user_info,
+                "tokens": tokens,
+            }
+            data["latest_user_key"] = user_key
+            self._write(data)
 
     def update_tokens(self, user_key: str, tokens: Dict[str, Any]) -> None:
-        data = self._read()
-        users = data.setdefault("users", {})
-        if user_key not in users:
-            raise KeyError(f"本地未找到用户 {user_key}")
-        users[user_key]["tokens"] = tokens
-        data["latest_user_key"] = user_key
-        self._write(data)
+        with self._lock:
+            data = self._read()
+            users = data.setdefault("users", {})
+            if user_key not in users:
+                raise KeyError(f"本地未找到用户 {user_key}")
+            users[user_key]["tokens"] = tokens
+            data["latest_user_key"] = user_key
+            self._write(data)
 
     def get_user(self, user_key: str) -> Optional[Dict[str, Any]]:
         return self._read().get("users", {}).get(user_key)

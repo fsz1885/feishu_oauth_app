@@ -5,6 +5,7 @@ from typing import Dict, List, Optional
 import requests
 
 from app.config import Settings
+from app.utils.feishu_http import request_json_with_backoff
 
 
 class FeishuSearchService:
@@ -49,7 +50,9 @@ class FeishuSearchService:
                 "Authorization": f"Bearer {access_token}",
                 "Content-Type": "application/json; charset=utf-8",
             }
-            resp = requests.post(self.settings.search_url, headers=headers, json=body, timeout=30)
+            resp = request_json_with_backoff(
+                "post", self.settings.search_url, headers=headers, json_body=body, timeout=30
+            )
             try:
                 result = resp.json()
             except ValueError:

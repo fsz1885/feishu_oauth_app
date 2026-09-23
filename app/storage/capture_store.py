@@ -1,27 +1,21 @@
 from __future__ import annotations
 
-import json
-import threading
-from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from app.storage.atomic_json import AtomicJsonStore
 from app.utils.time_utils import iso_now
 
 
-class CaptureStore:
+class CaptureStore(AtomicJsonStore):
     """JSON store for target contacts and processed recording docs.
 
-    All read-modify-write cycles are serialized with an RLock so the capture
-    scheduler thread and HTTP request threads cannot clobber each other.
+    Read-modify-write cycles are serialized by the inherited RLock; writes are
+    atomic and a corrupted file is backed up and rebuilt instead of crashing.
     """
 
     def __init__(self, file_path: str):
-        self.file_path = Path(file_path)
-        self.file_path.parent.mkdir(parents=True, exist_ok=True)
-        self._lock = threading.RLock()
+        super().__init__(file_path, self._empty)
         self._processed_keys: Optional[set] = None
-        if not self.file_path.exists():
-            self._write(self._empty())
 
     @staticmethod
     def _empty() -> Dict[str, Any]:
@@ -32,22 +26,6 @@ class CaptureStore:
             "settings": {},
             "settings_history": [],
         }
-
-    def _read(self) -> Dict[str, Any]:
-        if not self.file_path.exists():
-            return self._empty()
-        with self.file_path.open("r", encoding="utf-8") as f:
-            data = json.load(f)
-        data.setdefault("targets", {})
-        data.setdefault("processed_files", {})
-        data.setdefault("runs", [])
-        data.setdefault("settings", {})
-        data.setdefault("settings_history", [])
-        return data
-
-    def _write(self, data: Dict[str, Any]) -> None:
-        with self.file_path.open("w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
 
     def list_targets(self) -> List[Dict[str, Any]]:
         targets = self._read().get("targets", {})

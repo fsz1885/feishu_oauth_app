@@ -8,6 +8,7 @@ import requests
 
 from app.config import Settings
 from app.storage.json_store import LocalAuthStore
+from app.utils.feishu_http import request_json_with_backoff
 from app.utils.time_utils import expires_at_from_seconds, is_expired, iso_now
 
 
@@ -52,7 +53,7 @@ class FeishuOAuthService:
 
     def get_user_info(self, access_token: str) -> Dict[str, Any]:
         headers = {"Authorization": f"Bearer {access_token}"}
-        resp = requests.get(self.settings.user_info_url, headers=headers, timeout=30)
+        resp = request_json_with_backoff("get", self.settings.user_info_url, headers=headers, timeout=30)
         try:
             result = resp.json()
         except ValueError:
@@ -132,6 +133,20 @@ class FeishuOAuthService:
 
             for user_key, record in users.items():
                 user_info = record.get("user_info", {})
+                tokens = record.get("tokens", {})
+                # Only refresh tokens that are expired or expiring soon (<10 min):
+                # unconditional refreshes waste quota and increase exposure to
+                # refresh-token rotation races.
+                if not is_expired(tokens.get("access_token_expires_at"), skew_seconds=600):
+                    skipped_count += 1
+                    results.append({
+                        "user_key": user_key,
+                        "name": user_info.get("name"),
+                        "ok": True,
+                        "skipped": "access_token still valid",
+                        "access_token_expires_at": tokens.get("access_token_expires_at"),
+                    })
+                    continue
                 try:
                     refreshed_record = self.refresh_access_token(user_key)
                     tokens = refreshed_record["tokens"]
@@ -202,7 +217,7 @@ class FeishuOAuthService:
 
     def _post_json(self, url: str, body: Dict[str, Any]) -> Dict[str, Any]:
         headers = {"Content-Type": "application/json; charset=utf-8"}
-        resp = requests.post(url, headers=headers, json=body, timeout=30)
+        resp = request_json_with_backoff("post", url, headers=headers, json_body=body, timeout=30)
         try:
             result = resp.json()
         except ValueError:

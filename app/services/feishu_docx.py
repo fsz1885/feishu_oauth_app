@@ -6,6 +6,7 @@ from typing import Any, Dict, List, Optional
 import requests
 
 from app.config import Settings
+from app.utils.feishu_http import request_json_with_backoff
 
 
 class FeishuDocxService:
@@ -185,11 +186,11 @@ class FeishuDocxService:
             "Authorization": f"Bearer {access_token}",
             "Content-Type": "application/json; charset=utf-8",
         }
-        resp = requests.request(
+        resp = request_json_with_backoff(
             method,
             url,
             headers=headers,
-            json=json_body,
+            json_body=json_body,
             params=params,
             timeout=30,
         )

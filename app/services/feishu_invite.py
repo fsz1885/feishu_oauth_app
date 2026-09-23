@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Optional
 import requests
 
 from app.config import Settings
+from app.utils.feishu_http import request_json_with_backoff
 from app.utils.time_utils import iso_now
 
 
@@ -422,12 +423,12 @@ class FeishuInviteService:
         if token:
             headers["Authorization"] = f"Bearer {token}"
 
-        resp = requests.request(
+        resp = request_json_with_backoff(
             method,
             url,
             headers=headers,
             params=params,
-            json=json_body,
+            json_body=json_body,
             timeout=30,
         )
         try:
