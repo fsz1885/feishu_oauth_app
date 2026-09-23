@@ -155,6 +155,25 @@ http://localhost:8080/
 
 项目已包含 `Dockerfile`、`docker-compose.yml` 和一键脚本 `deploy.sh`，支持容器化部署。
 
+### HTTPS 部署（Caddy + Let's Encrypt，推荐）
+
+生产环境通过 Caddy 反向代理提供 HTTPS（自动申请/续期 Let's Encrypt 免费证书）：
+
+1. 域名 A 记录指向服务器公网 IP，云安全组放行 **80/443**
+2. 配置文件在 `deploy/caddy/Caddyfile`（将 `mkt.gemdalesh.cn` 换成你的域名）
+3. 启动 Caddy（host 网络，证书数据持久化）：
+
+```bash
+mkdir -p /opt/caddy-data /opt/caddy-config
+docker run -d --name feishu-caddy --network host --restart unless-stopped \
+  -v $PWD/deploy/caddy/Caddyfile:/etc/caddy/Caddyfile:ro \
+  -v /opt/caddy-data:/data -v /opt/caddy-config:/config \
+  caddy:2-alpine
+```
+
+4. 应用 `.env` 同步改为域名地址：`FEISHU_REDIRECT_URI=https://你的域名/callback`、`PUBLIC_BASE_URL=https://你的域名`，重建应用容器
+5. 飞书开发者后台「安全设置」中新增重定向 URL：`https://你的域名/callback`
+
 ### 1. 准备环境变量
 
 与本地启动一样，先准备 `.env` 文件：
