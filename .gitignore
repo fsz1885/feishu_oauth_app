@@ -2,3 +2,4 @@ __pycache__/
 *.pyc
 .env
 data/auth_store.json
+data/capture_store.json

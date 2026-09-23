@@ -106,6 +106,7 @@ Copy-Item .env.example .env
 FEISHU_APP_ID=你的_APP_ID
 FEISHU_APP_SECRET=你的_APP_SECRET
 FEISHU_REDIRECT_URI=http://localhost:8080/callback
+FRONTEND_USERNAME=你的前端登录用户名
 FRONTEND_PASSWORD=你的前端访问密码
 ```
 
@@ -120,6 +121,7 @@ FRONTEND_PASSWORD=你的前端访问密码
 | `APP_DEBUG` | `false` | 是否开启 Flask debug 模式 |
 | `LOCAL_STORE_PATH` | `data/auth_store.json` | 本地认证信息存储路径 |
 | `PUBLIC_BASE_URL` | `""` | 对外暴露的 base URL，用于生成邀请链接（如 `https://your-domain.com`） |
+| `FRONTEND_USERNAME` | `admin` | 前端页面与受保护接口的登录用户名 |
 | `FRONTEND_PASSWORD` | `change_me_to_a_strong_password` | 前端页面与受保护接口的访问密码，**部署前务必修改** |
 | `SESSION_SECRET_KEY` | 取 `FEISHU_APP_SECRET` | Flask session 加密密钥，建议设置为独立的长随机字符串 |
 | `CONTACT_CACHE_REFRESH_SECONDS` | `3600` | 通讯录缓存自动刷新间隔（秒） |
@@ -144,7 +146,7 @@ python run.py
 http://localhost:8080/
 ```
 
-> 首次访问任意受保护页面会先跳转到 `/front-login` 输入 `FRONTEND_PASSWORD` 登录；`/login`、`/callback`、`/invite` 保持公开，方便直接分享给同事授权。
+> 首次访问任意受保护页面会先跳转到 `/front-login` 输入 `FRONTEND_USERNAME` 和 `FRONTEND_PASSWORD` 登录；`/login`、`/callback`、`/invite` 保持公开，方便直接分享给同事授权。
 
 ---
 
@@ -558,6 +560,6 @@ data/auth_store.json
 
 - 不要把 `APP_SECRET` 提交到 Git
 - 不要把真实 token 文件提交到 Git
-- 部署到服务器前务必修改 `FRONTEND_PASSWORD` 和 `SESSION_SECRET_KEY`，不要使用默认值
+- 部署到服务器前务必修改 `FRONTEND_USERNAME`、`FRONTEND_PASSWORD` 和 `SESSION_SECRET_KEY`，不要使用默认值
 - 正式环境建议加密存储 token，或改用数据库 / 密钥管理服务
 - 本项目当前更适合本地开发和内网工具；如需暴露到公网，请配合 HTTPS、反向代理和访问控制使用

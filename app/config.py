@@ -22,6 +22,7 @@ class Settings:
     debug: bool = os.getenv("APP_DEBUG", "false").lower() == "true"
     store_path: str = os.getenv("LOCAL_STORE_PATH", "data/auth_store.json")
     public_base_url: str = os.getenv("PUBLIC_BASE_URL", "").rstrip("/")
+    frontend_username: str = os.getenv("FRONTEND_USERNAME", "admin")
     frontend_password: str = os.getenv("FRONTEND_PASSWORD", "change_me_to_a_strong_password")
     session_secret_key: str = os.getenv("SESSION_SECRET_KEY") or os.getenv("FEISHU_APP_SECRET", "dev-session-secret")
     contact_cache_refresh_seconds: int = int(os.getenv("CONTACT_CACHE_REFRESH_SECONDS", "3600"))

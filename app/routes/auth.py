@@ -35,11 +35,14 @@ def frontend_login():
 
     if request.method == "POST":
         settings = current_app.extensions["settings"]
+        username = request.form.get("username", "")
         password = request.form.get("password", "")
-        if compare_digest(password, settings.frontend_password):
+        if compare_digest(username, settings.frontend_username) and compare_digest(
+            password, settings.frontend_password
+        ):
             session["frontend_authenticated"] = True
             return redirect(next_url)
-        error_text = "密码不正确"
+        error_text = "用户名或密码不正确"
 
     return f"""
     <!doctype html>
@@ -98,8 +101,10 @@ def frontend_login():
         <h1>工具登录</h1>
         {f'<div class="error">{html_escape(error_text)}</div>' if error_text else ''}
         <input type="hidden" name="next" value="{html_escape(next_url)}" />
+        <label for="username">用户名</label>
+        <input id="username" name="username" type="text" autocomplete="username" autofocus required />
         <label for="password">密码</label>
-        <input id="password" name="password" type="password" autocomplete="current-password" autofocus required />
+        <input id="password" name="password" type="password" autocomplete="current-password" required />
         <button type="submit">登录</button>
       </form>
     </body>
