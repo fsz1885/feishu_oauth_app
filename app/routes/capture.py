@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import logging
+import re
 from datetime import datetime
+from urllib.parse import urlparse
 
 from flask import Blueprint, current_app, request
 
@@ -9,6 +11,20 @@ from app.utils.response import err, ok
 
 bp = Blueprint("capture", __name__)
 logger = logging.getLogger(__name__)
+
+# Feishu tokens are URL-safe base62-ish strings; folders are NOT always "fld"-prefixed
+# (e.g. "WFWOf7fxalaB9KdjJV6cceDxnBb"), so keep the check permissive — the live
+# Feishu validation below is the real gate.
+FOLDER_TOKEN_RE = re.compile(r"[A-Za-z0-9_-]{10,64}")
+
+
+def extract_folder_token(raw: str) -> str:
+    """Accept either a bare folder token or a pasted folder URL."""
+    value = (raw or "").strip()
+    if "/" in value:
+        path = urlparse(value).path.rstrip("/")
+        value = path.rsplit("/", 1)[-1].strip() if path else ""
+    return value
 
 
 @bp.get("/capture/targets")
@@ -133,15 +149,15 @@ def update_capture_folder_token():
     docx_service = current_app.extensions["docx_service"]
     payload = request.get_json(silent=True) or {}
 
-    folder_token = str(payload.get("folder_token") or "").strip()
+    folder_token = extract_folder_token(str(payload.get("folder_token") or ""))
     confirm = payload.get("confirm") is True
 
     if not confirm:
         return err("请先勾选确认复选框后再提交", 400)
     if not folder_token:
         return err("folder_token 不能为空", 400)
-    if not folder_token.startswith("fld") or len(folder_token) < 10:
-        return err("folder_token 格式不正确：应以 fld 开头且长度不小于 10", 400)
+    if not FOLDER_TOKEN_RE.fullmatch(folder_token):
+        return err("folder_token 格式不正确：请粘贴文件夹 token，或直接粘贴文件夹链接（将自动提取 token）", 400)
 
     users = oauth_service.store.list_users()
     if not users:

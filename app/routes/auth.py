@@ -465,8 +465,8 @@ def index():
           <summary style="cursor:pointer;font-weight:700;">高级设置（仅管理员，不常用）</summary>
           <div class="tiny muted" style="margin:12px 0 4px;">抓取目标文件夹：<span id="folderTokenStatus">检测中…</span></div>
           <div class="field">
-            <label for="folderTokenInput">新的目标文件夹 token（fld 开头）</label>
-            <input id="folderTokenInput" type="text" placeholder="fldxxxxxxxxxxxxxxx" autocomplete="off" />
+            <label for="folderTokenInput">新的目标文件夹（粘贴 token 或文件夹链接均可）</label>
+            <input id="folderTokenInput" type="text" placeholder="https://xxx.feishu.cn/drive/folder/… 或文件夹 token" autocomplete="off" />
           </div>
           <label style="display:flex;align-items:center;gap:8px;font-weight:400;margin-bottom:12px;">
             <input type="checkbox" id="folderTokenConfirm" style="width:auto;" />
@@ -475,7 +475,7 @@ def index():
           <div class="actions">
             <button type="button" id="saveFolderTokenBtn" disabled>校验并保存</button>
           </div>
-          <div class="tiny muted" style="margin-top:8px;">保存前会用飞书 API 在目标文件夹创建一篇《【验证用-可删除】》测试文档（验证后请手动删除）；校验失败不会保存。优先级：此处设置 &gt; 环境变量 CAPTURE_TARGET_FOLDER_TOKEN。</div>
+          <div class="tiny muted" style="margin-top:8px;">支持直接粘贴飞书文件夹链接（自动提取 token）。保存前会用飞书 API 在目标文件夹创建一篇《【验证用-可删除】》测试文档（验证后请手动删除）；校验失败不会保存。优先级：此处设置 &gt; 环境变量 CAPTURE_TARGET_FOLDER_TOKEN。</div>
         </details>
       </div>
 
@@ -1036,11 +1036,20 @@ def index():
           }}
         }}
 
+        function extractFolderToken(raw) {{
+          let value = (raw || '').trim();
+          if (value.indexOf('/') >= 0) {{
+            const parts = value.split('?')[0].split('#')[0].split('/');
+            value = parts[parts.length - 1] || '';
+          }}
+          return value;
+        }}
+
         async function saveCaptureFolderToken() {{
           const box = document.getElementById('resultBox');
-          const token = document.getElementById('folderTokenInput').value.trim();
+          const token = extractFolderToken(document.getElementById('folderTokenInput').value);
           if (!token) {{
-            box.textContent = '请输入新的目标文件夹 token。';
+            box.textContent = '请输入目标文件夹 token，或直接粘贴文件夹链接。';
             return;
           }}
           let oldDesc = '未配置';
