@@ -3,12 +3,12 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>登录</title>
+  <title>Feishu Doc Hub · 登录</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}" />
 </head>
 <body class="login-body">
   <form class="login-panel" method="post" action="{{ url_for('auth.frontend_login') }}">
-    <h1>工具登录</h1>
+    <h1>Feishu Doc Hub</h1>
     {% if error_text %}<div class="login-error">{{ error_text }}</div>{% endif %}
     <input type="hidden" name="next" value="{{ next_url }}" />
     <label for="username">用户名</label>

@@ -1,6 +1,6 @@
-# Feishu OAuth + Cloud Docs Search / Clone / Invite / Capture
+# Feishu Doc Hub
 
-一个适合本地开发、内网工具和服务端部署的飞书 OAuth 小工程，已支持：
+飞书授权 · 云档搜索 · 录音归档 — 已通过上线前压力测试（7/7）的飞书 OAuth 生产服务，支持：
 
 - 浏览器授权登录（`/login` → 飞书授权页 → `/callback`）
 - 显式申请 `offline_access`，本地持久化 `access_token` / `refresh_token` / 用户信息
