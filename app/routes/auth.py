@@ -373,16 +373,17 @@ def index():
                 <button type="button" id="runCaptureBtn">立即抓取新增文字记录</button>
                 <button type="button" class="secondary" id="refreshCaptureTargetsBtn">刷新抓取用户组</button>
               </div>
-              <div class="tiny muted">每日后台会自动搜索用户组内成员新增的“文字记录”文件；需要配置 CAPTURE_TARGET_FOLDER_TOKEN 才会执行复制。</div>
+              <div class="tiny muted">每日后台会自动搜索用户组内成员新增的“文字记录”文件；目标文件夹：<span id="captureFolderStatus">检测中…</span>（可在页面底部“高级设置”修改）。</div>
             </div>
             <div>
               <div class="member-list" id="captureTargetList"></div>
             </div>
           </div>
           <div class="actions" style="margin-top:14px;">
+            <select id="captureFailureRunSelect" style="max-width:280px;"></select>
             <button type="button" class="secondary" id="refreshCaptureFailuresBtn">刷新失败记录</button>
           </div>
-          <div class="tiny muted">最近几轮抓取的失败明细（整轮 / 目标 / 单文件），便于管理员发现异常；完整历史可看 /capture/runs。</div>
+          <div class="tiny muted">下拉选择轮次查看失败明细（整轮 / 目标 / 单文件），单轮默认只显示前 10 条；完整历史可看 /capture/runs。</div>
           <div class="member-list" id="captureFailureList"></div>
         </div>
 
@@ -459,6 +460,23 @@ def index():
           <h2>搜索结果</h2>
           <div id="resultBox" class="result-box">点击“开始搜索”后，这里会显示 JSON 结果。</div>
         </div>
+
+        <details class="card" id="advancedSettingsCard">
+          <summary style="cursor:pointer;font-weight:700;">高级设置（仅管理员，不常用）</summary>
+          <div class="tiny muted" style="margin:12px 0 4px;">抓取目标文件夹：<span id="folderTokenStatus">检测中…</span></div>
+          <div class="field">
+            <label for="folderTokenInput">新的目标文件夹 token（fld 开头）</label>
+            <input id="folderTokenInput" type="text" placeholder="fldxxxxxxxxxxxxxxx" autocomplete="off" />
+          </div>
+          <label style="display:flex;align-items:center;gap:8px;font-weight:400;margin-bottom:12px;">
+            <input type="checkbox" id="folderTokenConfirm" style="width:auto;" />
+            <span class="tiny">我已核对 token 正确，并了解修改会影响后续所有抓取</span>
+          </label>
+          <div class="actions">
+            <button type="button" id="saveFolderTokenBtn" disabled>校验并保存</button>
+          </div>
+          <div class="tiny muted" style="margin-top:8px;">保存前会用飞书 API 在目标文件夹创建一篇《【验证用-可删除】》测试文档（验证后请手动删除）；校验失败不会保存。优先级：此处设置 &gt; 环境变量 CAPTURE_TARGET_FOLDER_TOKEN。</div>
+        </details>
       </div>
 
       <script>
@@ -894,39 +912,83 @@ def index():
           }}
         }}
 
-        function renderCaptureFailures(runs) {{
+        let captureFailureRuns = [];
+        let captureFailureShowAll = false;
+
+        function renderCaptureFailureRunOptions() {{
+          const select = document.getElementById('captureFailureRunSelect');
+          select.innerHTML = '';
+          if (!captureFailureRuns.length) {{
+            const option = document.createElement('option');
+            option.value = '';
+            option.textContent = '没有失败轮次';
+            select.appendChild(option);
+            select.disabled = true;
+            return;
+          }}
+          select.disabled = false;
+          captureFailureRuns.forEach((run, index) => {{
+            const option = document.createElement('option');
+            option.value = String(index);
+            const count = (run.failures || []).length;
+            option.textContent = (run.run_started_at || '').slice(5, 19) + ' ｜ 失败 ' + count + ' 条';
+            select.appendChild(option);
+          }});
+        }}
+
+        function renderCaptureFailures() {{
           const list = document.getElementById('captureFailureList');
           list.innerHTML = '';
-          if (!runs || !runs.length) {{
+          if (!captureFailureRuns.length) {{
             const empty = document.createElement('div');
             empty.className = 'tiny muted';
             empty.textContent = '最近几轮抓取没有失败记录。';
             list.appendChild(empty);
             return;
           }}
-          runs.forEach((run) => {{
-            const head = document.createElement('div');
-            head.className = 'tiny muted';
-            head.textContent = '轮次 ' + (run.run_started_at || '') + ' ｜ ' + (run.summary || '');
-            list.appendChild(head);
-            (run.failures || []).forEach((f) => {{
-              const item = document.createElement('div');
-              item.className = 'member-item';
-              const main = document.createElement('div');
-              const name = document.createElement('div');
-              name.className = 'member-main';
-              let label = '[' + (f.scope || '?') + '] ' + (f.target_name || '');
-              if (f.title) {{ label = label + ' — ' + f.title; }}
-              name.textContent = label;
-              const sub = document.createElement('div');
-              sub.className = 'member-sub';
-              sub.textContent = f.error || '';
-              main.appendChild(name);
-              main.appendChild(sub);
-              item.appendChild(main);
-              list.appendChild(item);
-            }});
+          const select = document.getElementById('captureFailureRunSelect');
+          const index = Number(select.value || '0') || 0;
+          const run = captureFailureRuns[index] || captureFailureRuns[0];
+          const failures = run.failures || [];
+          const limit = captureFailureShowAll ? failures.length : 10;
+
+          const head = document.createElement('div');
+          head.className = 'tiny muted';
+          head.textContent = (run.run_started_at || '') + ' ｜ ' + (run.summary || '');
+          list.appendChild(head);
+
+          failures.slice(0, limit).forEach((f) => {{
+            const item = document.createElement('div');
+            item.className = 'member-item';
+            const main = document.createElement('div');
+            const name = document.createElement('div');
+            name.className = 'member-main';
+            let label = '[' + (f.scope || '?') + '] ' + (f.target_name || '');
+            if (f.title) {{ label = label + ' — ' + f.title; }}
+            name.textContent = label;
+            const sub = document.createElement('div');
+            sub.className = 'member-sub';
+            sub.textContent = f.error || '';
+            main.appendChild(name);
+            main.appendChild(sub);
+            item.appendChild(main);
+            list.appendChild(item);
           }});
+
+          if (failures.length > 10) {{
+            const more = document.createElement('button');
+            more.type = 'button';
+            more.className = 'secondary';
+            more.style.marginTop = '8px';
+            more.textContent = captureFailureShowAll
+              ? '收起，只显示前 10 条'
+              : '显示全部 ' + failures.length + ' 条';
+            more.addEventListener('click', () => {{
+              captureFailureShowAll = !captureFailureShowAll;
+              renderCaptureFailures();
+            }});
+            list.appendChild(more);
+          }}
         }}
 
         async function loadCaptureFailures() {{
@@ -937,13 +999,77 @@ def index():
             if (!data.ok) {{
               throw new Error(data.error || '加载失败记录失败');
             }}
-            renderCaptureFailures(data.runs_with_failures || []);
+            captureFailureRuns = data.runs_with_failures || [];
+            captureFailureShowAll = false;
+            renderCaptureFailureRunOptions();
+            renderCaptureFailures();
           }} catch (err) {{
             list.innerHTML = '';
             const empty = document.createElement('div');
             empty.className = 'tiny muted';
             empty.textContent = '加载失败记录失败：' + err.message;
             list.appendChild(empty);
+          }}
+        }}
+
+        function renderFolderTokenStatus(status) {{
+          const text = status.configured
+            ? '已配置（来源：' + (status.source === 'frontend' ? '前端设置' : '环境变量') + '，' + (status.masked_token || '') + '）'
+            : '未配置（抓取不会执行复制）';
+          const el1 = document.getElementById('captureFolderStatus');
+          const el2 = document.getElementById('folderTokenStatus');
+          if (el1) {{ el1.textContent = text; }}
+          if (el2) {{ el2.textContent = text; }}
+        }}
+
+        async function loadCaptureSettings() {{
+          try {{
+            const res = await fetch('/capture/settings');
+            const data = await res.json();
+            if (!data.ok) {{
+              throw new Error(data.error || '加载设置失败');
+            }}
+            renderFolderTokenStatus(data);
+          }} catch (err) {{
+            const el = document.getElementById('captureFolderStatus');
+            if (el) {{ el.textContent = '加载失败：' + err.message; }}
+          }}
+        }}
+
+        async function saveCaptureFolderToken() {{
+          const box = document.getElementById('resultBox');
+          const token = document.getElementById('folderTokenInput').value.trim();
+          if (!token) {{
+            box.textContent = '请输入新的目标文件夹 token。';
+            return;
+          }}
+          let oldDesc = '未配置';
+          try {{
+            const res = await fetch('/capture/settings');
+            const status = await res.json();
+            if (status.ok && status.configured) {{
+              oldDesc = status.masked_token || '';
+            }}
+          }} catch (err) {{ /* ignore status fetch errors */ }}
+          if (!window.confirm('确认修改抓取目标文件夹？\\n当前：' + oldDesc + '\\n新的：' + token + '\\n\\n保存前会在目标文件夹创建一篇验证文档。')) {{
+            return;
+          }}
+          try {{
+            const res = await fetch('/capture/settings/folder-token', {{
+              method: 'POST',
+              headers: {{ 'Content-Type': 'application/json' }},
+              body: JSON.stringify({{ folder_token: token, confirm: true }}),
+            }});
+            const data = await res.json();
+            box.textContent = JSON.stringify(data, null, 2);
+            if (data.ok) {{
+              document.getElementById('folderTokenInput').value = '';
+              document.getElementById('folderTokenConfirm').checked = false;
+              document.getElementById('saveFolderTokenBtn').disabled = true;
+              await loadCaptureSettings();
+            }}
+          }} catch (err) {{
+            box.textContent = '保存失败：' + err.message;
           }}
         }}
 
@@ -1026,6 +1152,14 @@ def index():
         document.getElementById('runCaptureBtn').addEventListener('click', runCaptureNow);
         document.getElementById('refreshCaptureTargetsBtn').addEventListener('click', loadCaptureTargets);
         document.getElementById('refreshCaptureFailuresBtn').addEventListener('click', loadCaptureFailures);
+        document.getElementById('captureFailureRunSelect').addEventListener('change', () => {{
+          captureFailureShowAll = false;
+          renderCaptureFailures();
+        }});
+        document.getElementById('folderTokenConfirm').addEventListener('change', (event) => {{
+          document.getElementById('saveFolderTokenBtn').disabled = !event.target.checked;
+        }});
+        document.getElementById('saveFolderTokenBtn').addEventListener('click', saveCaptureFolderToken);
         document.getElementById('searchBtn').addEventListener('click', doSearch);
         document.getElementById('refreshTokenBtn').addEventListener('click', refreshSelectedUserToken);
         document.getElementById('refreshAllTokensBtn').addEventListener('click', refreshAllUserTokens);
@@ -1066,6 +1200,7 @@ def index():
         loadInviteContacts();
         loadCaptureTargets();
         loadCaptureFailures();
+        loadCaptureSettings();
       </script>
     </body>
     </html>

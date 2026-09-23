@@ -61,7 +61,7 @@ class ContentCaptureService:
             }
 
         started_at = iso_now()
-        target_folder_token = self.settings.capture_target_folder_token.strip()
+        target_folder_token = self.target_folder_token()
         targets = self.capture_store.list_targets()
         interval_seconds = getattr(self.settings, "capture_target_interval_seconds", 1.0)
         created_count = 0
@@ -298,6 +298,30 @@ class ContentCaptureService:
         if not users:
             raise RuntimeError("no authorized user available for capture")
         return next(iter(users.keys()))
+
+    def target_folder_token(self) -> str:
+        """Resolve capture target folder token: frontend override first, then env."""
+        override = self.capture_store.get_setting("capture_target_folder_token")
+        if override and override.strip():
+            return override.strip()
+        return (self.settings.capture_target_folder_token or "").strip()
+
+    def target_folder_token_status(self) -> Dict[str, Any]:
+        override = (self.capture_store.get_setting("capture_target_folder_token") or "").strip()
+        env_value = (self.settings.capture_target_folder_token or "").strip()
+        if override:
+            return {
+                "configured": True,
+                "source": "frontend",
+                "masked_token": self.capture_store.mask_token(override),
+            }
+        if env_value:
+            return {
+                "configured": True,
+                "source": "env",
+                "masked_token": self.capture_store.mask_token(env_value),
+            }
+        return {"configured": False, "source": None, "masked_token": None}
 
     def _resolve_target_user_key(self, target: Dict[str, Any]) -> Optional[str]:
         """Return the target's user_key if they have a local OAuth session, else None."""

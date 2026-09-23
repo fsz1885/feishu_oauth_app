@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import logging
+from datetime import datetime
+
 from flask import Blueprint, current_app, request
 
 from app.utils.response import err, ok
 
 bp = Blueprint("capture", __name__)
+logger = logging.getLogger(__name__)
 
 
 @bp.get("/capture/targets")
@@ -107,3 +111,70 @@ def list_failures():
             break
 
     return ok(count=len(runs_with_failures), runs_with_failures=runs_with_failures)
+
+
+@bp.get("/capture/settings")
+def get_capture_settings():
+    """Return the effective capture target folder token (masked) and its source."""
+    capture_service = current_app.extensions["capture_service"]
+    return ok(**capture_service.target_folder_token_status())
+
+
+@bp.post("/capture/settings/folder-token")
+def update_capture_folder_token():
+    """Validate a new target folder token via Feishu, then persist it as override.
+
+    Guard rails: explicit confirm flag, strict format check, and a live
+    validation that creates a throwaway test document in the target folder.
+    The setting is only saved when the Feishu API accepts the folder token.
+    """
+    capture_service = current_app.extensions["capture_service"]
+    oauth_service = current_app.extensions["oauth_service"]
+    docx_service = current_app.extensions["docx_service"]
+    payload = request.get_json(silent=True) or {}
+
+    folder_token = str(payload.get("folder_token") or "").strip()
+    confirm = payload.get("confirm") is True
+
+    if not confirm:
+        return err("请先勾选确认复选框后再提交", 400)
+    if not folder_token:
+        return err("folder_token 不能为空", 400)
+    if not folder_token.startswith("fld") or len(folder_token) < 10:
+        return err("folder_token 格式不正确：应以 fld 开头且长度不小于 10", 400)
+
+    users = oauth_service.store.list_users()
+    if not users:
+        return err("本地没有已授权用户，无法验证文件夹 token，请先完成 OAuth 授权", 400)
+    user_key = next(iter(users.keys()))
+
+    test_title = f"【验证用-可删除】token校验_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    try:
+        session_record = oauth_service.ensure_valid_access_token(user_key)
+        access_token = session_record["tokens"]["access_token"]
+        created = docx_service.create_document(
+            access_token=access_token,
+            target_folder_token=folder_token,
+            title=test_title,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("folder token validation failed: %s", exc)
+        return err(f"飞书校验失败，设置未保存：{exc}", 400)
+
+    result = capture_service.capture_store.set_setting(
+        "capture_target_folder_token", folder_token, changed_by="frontend"
+    )
+    logger.info(
+        "capture folder token updated via frontend: %s -> %s",
+        result.get("previous_masked"),
+        result.get("current_masked"),
+    )
+    return ok(
+        message="目标文件夹 token 已通过飞书校验并保存",
+        test_document={
+            "document_id": created.get("document_id"),
+            "title": test_title,
+            "hint": "验证用的测试文档已创建在目标文件夹中，请打开文件夹手动删除它",
+        },
+        **result,
+    )

@@ -22,6 +22,8 @@ class CaptureStore:
             "targets": {},
             "processed_files": {},
             "runs": [],
+            "settings": {},
+            "settings_history": [],
         }
 
     def _read(self) -> Dict[str, Any]:
@@ -32,6 +34,8 @@ class CaptureStore:
         data.setdefault("targets", {})
         data.setdefault("processed_files", {})
         data.setdefault("runs", [])
+        data.setdefault("settings", {})
+        data.setdefault("settings_history", [])
         return data
 
     def _write(self, data: Dict[str, Any]) -> None:
@@ -102,6 +106,39 @@ class CaptureStore:
 
     def list_runs(self) -> List[Dict[str, Any]]:
         return list(reversed(self._read().get("runs", [])))
+
+    def get_setting(self, key: str) -> Optional[str]:
+        value = self._read().get("settings", {}).get(key)
+        return str(value) if value else None
+
+    def set_setting(self, key: str, value: str, *, changed_by: str = "frontend") -> Dict[str, Any]:
+        data = self._read()
+        previous = data.get("settings", {}).get(key)
+        data.setdefault("settings", {})[key] = value
+        history = data.setdefault("settings_history", [])
+        history.append({
+            "key": key,
+            "changed_by": changed_by,
+            "changed_at": iso_now(),
+            "previous": self.mask_token(str(previous)) if previous else None,
+            "current": self.mask_token(value),
+        })
+        data["settings_history"] = history[-50:]
+        self._write(data)
+        return {
+            "key": key,
+            "previous_masked": self.mask_token(str(previous)) if previous else None,
+            "current_masked": self.mask_token(value),
+            "changed_at": iso_now(),
+        }
+
+    @staticmethod
+    def mask_token(value: Optional[str]) -> Optional[str]:
+        if not value:
+            return None
+        if len(value) <= 10:
+            return value[:4] + "****"
+        return value[:6] + "****" + value[-4:]
 
     @staticmethod
     def _target_key(user: Dict[str, Any]) -> str:
