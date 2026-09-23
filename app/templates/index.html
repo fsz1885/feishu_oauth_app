@@ -1,0 +1,193 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Feishu OAuth + Search Demo</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}" />
+</head>
+<body>
+  <div class="wrap">
+      <div class="wrap">
+        <div class="card">
+          <h1>Feishu OAuth + Search Demo</h1>
+          <p class="muted">搜索必须选择本地已授权用户，前端只会把选中的 <code>user_key</code> 带到后端。</p>
+          <div class="actions">
+            <a class="button-link" href="/login">新增授权用户</a>
+            <button type="button" class="secondary" id="refreshUsersBtn">刷新用户列表</button>
+            <button type="button" class="secondary" id="refreshAllTokensBtn">刷新全部 token</button>
+            <a class="button-link secondary" href="/users" target="_blank" rel="noopener noreferrer">查看 /users</a>
+          </div>
+          <div class="share-grid">
+            <div class="field">
+              <label for="inviteUrl">发送给别人的授权链接</label>
+              <textarea id="inviteUrl" class="copy-box" readonly>{{ invite_url }}</textarea>
+              <div class="actions">
+                <button type="button" class="secondary" data-copy-target="inviteUrl">复制授权链接</button>
+                <a class="button-link secondary" href="/invite" target="_blank" rel="noopener noreferrer">预览邀请页</a>
+              </div>
+            </div>
+            <div class="field">
+              <label for="inviteText">可直接发送的邀请文案</label>
+              <textarea id="inviteText" class="copy-box" readonly>{{ invite_text }}</textarea>
+              <div class="actions">
+                <button type="button" class="secondary" data-copy-target="inviteText">复制邀请文案</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <h2>搜索通讯录并发送授权邀请</h2>
+          <div class="row">
+            <div>
+              <div class="field">
+                <label for="inviteKeyword">用户名关键词</label>
+                <input id="inviteKeyword" type="text" placeholder="输入姓名、英文名、邮箱或手机号" />
+              </div>
+              <div class="actions">
+                <button type="button" id="searchInviteUsersBtn">搜索通讯录成员</button>
+                <button type="button" class="secondary" id="refreshContactsBtn">刷新通讯录缓存</button>
+              </div>
+            </div>
+            <div>
+              <div class="field">
+                <label for="inviteUserSelect">匹配成员</label>
+                <select id="inviteUserSelect">
+                  <option value="">请先搜索通讯录成员</option>
+                </select>
+              </div>
+              <div class="field">
+                <label for="inviteMessage">邀请消息</label>
+                <textarea id="inviteMessage" placeholder="留空则使用默认授权邀请文案"></textarea>
+              </div>
+              <div class="actions">
+                <button type="button" id="sendInviteBtn">发送授权邀请</button>
+                <button type="button" class="secondary" id="addCaptureTargetBtn">加入抓取用户组</button>
+              </div>
+              <div class="tiny muted">邀请只用于让对方点击授权；文档搜索仍然只能选择本地已授权用户的 user_key。</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <h2>指定用户内容抓取</h2>
+          <div class="row">
+            <div>
+              <div class="actions">
+                <button type="button" id="runCaptureBtn">立即抓取新增文字记录</button>
+                <button type="button" class="secondary" id="refreshCaptureTargetsBtn">刷新抓取用户组</button>
+              </div>
+              <div class="tiny muted">每日后台会自动搜索用户组内成员新增的“文字记录”文件；目标文件夹：<span id="captureFolderStatus">检测中…</span>（可在页面底部“高级设置”修改）。</div>
+            </div>
+            <div>
+              <div class="member-list" id="captureTargetList"></div>
+            </div>
+          </div>
+          <div class="actions" style="margin-top:14px;">
+            <select id="captureFailureRunSelect" style="max-width:280px;"></select>
+            <button type="button" class="secondary" id="refreshCaptureFailuresBtn">刷新失败记录</button>
+          </div>
+          <div class="tiny muted">下拉选择轮次查看失败明细（整轮 / 目标 / 单文件），单轮默认只显示前 10 条；完整历史可看 /capture/runs。</div>
+          <div class="member-list" id="captureFailureList"></div>
+        </div>
+
+        <div class="card">
+          <h2>搜索面板</h2>
+          <div class="row">
+            <div>
+              <div class="field">
+                <label for="keyword">搜索关键词 q</label>
+                <input id="keyword" type="text" placeholder="例如：项目、文字记录" value="" />
+              </div>
+              <div class="field">
+                <label for="userSelect">选择已授权用户</label>
+                <input id="userFilter" type="text" placeholder="输入用户名、open_id 或 user_id 过滤" />
+                <select id="userSelect">
+                  <option value="">请选择一个已授权用户</option>
+                </select>
+                <div class="tiny muted">当前匹配用户数：<span id="userCount">{{ users_count }}</span></div>
+              </div>
+              <div class="field">
+                <label for="docsTypes">文档类型 docs_types</label>
+                <input id="docsTypes" type="text" placeholder="例如：doc,sheet" />
+                <div class="tiny muted">可选：doc / sheet / slides / bitable / mindnote / file</div>
+              </div>
+              <label style="display:flex;align-items:center;gap:8px;font-weight:400;margin-bottom:12px;">
+                <input type="checkbox" id="ownerOnlyFilter" style="width:auto;" checked />
+                <span class="tiny">仅显示该用户名下的文件（过滤掉别人创建但共享可见的文档）</span>
+              </label>
+              <div class="actions">
+                <button type="button" id="searchBtn">开始搜索</button>
+                <button type="button" class="secondary" id="refreshTokenBtn">刷新当前用户 token</button>
+                <button type="button" class="secondary" id="fillExampleBtn">填入示例</button>
+              </div>
+            </div>
+            <div>
+              <div class="field">
+                <label>当前请求 scope</label>
+                <div>
+                  {% for s in scopes %}<span class="pill">{{ s }}</span>{% endfor %}
+                </div>
+              </div>
+              <div class="field">
+                <label>调试授权链接</label>
+                <textarea readonly>{{ auth_url }}</textarea>
+              </div>
+              <div class="tiny muted">首次使用请先点“新增授权用户”，授权成功后再回来搜索。</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <h2>复制文档到文件夹</h2>
+          <div class="row">
+            <div>
+              <div class="field">
+                <label for="sourceDocumentId">源文档</label>
+                <input id="sourceDocumentId" type="text" placeholder="粘贴 docx 链接或输入 document_id" />
+              </div>
+              <div class="field">
+                <label for="cloneTitle">新文档标题</label>
+                <input id="cloneTitle" type="text" placeholder="留空则使用 Copied document" />
+              </div>
+            </div>
+            <div>
+              <div class="field">
+                <label for="cloneFolderToken">目标 folder token</label>
+                <input id="cloneFolderToken" type="text" placeholder="输入目标文件夹 token" />
+              </div>
+              <div class="actions">
+                <button type="button" id="cloneDocBtn">读取并复制到文件夹</button>
+              </div>
+              <div class="tiny muted">当前版本会复制源 docx 的纯文本内容，不复制图片、表格样式或复杂块结构。</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <h2>搜索结果</h2>
+          <div id="resultBox" class="result-box">点击“开始搜索”后，这里会显示 JSON 结果。</div>
+        </div>
+
+        <details class="card" id="advancedSettingsCard">
+          <summary style="cursor:pointer;font-weight:700;">高级设置（仅管理员，不常用）</summary>
+          <div class="tiny muted" style="margin:12px 0 4px;">抓取目标文件夹：<span id="folderTokenStatus">检测中…</span></div>
+          <div class="field">
+            <label for="folderTokenInput">新的目标文件夹（粘贴 token 或文件夹链接均可）</label>
+            <input id="folderTokenInput" type="text" placeholder="https://xxx.feishu.cn/drive/folder/… 或文件夹 token" autocomplete="off" />
+          </div>
+          <label style="display:flex;align-items:center;gap:8px;font-weight:400;margin-bottom:12px;">
+            <input type="checkbox" id="folderTokenConfirm" style="width:auto;" />
+            <span class="tiny">我已核对 token 正确，并了解修改会影响后续所有抓取</span>
+          </label>
+          <div class="actions">
+            <button type="button" id="saveFolderTokenBtn" disabled>校验并保存</button>
+          </div>
+          <div class="tiny muted" style="margin-top:8px;">支持直接粘贴飞书文件夹链接（自动提取 token）。保存前会用飞书 API 在目标文件夹创建一篇《【验证用-可删除】》测试文档（验证后请手动删除）；校验失败不会保存。优先级：此处设置 &gt; 环境变量 CAPTURE_TARGET_FOLDER_TOKEN。</div>
+        </details>
+      </div>
+  </div>
+  <script src="{{ url_for('static', filename='js/app.js') }}"></script>
+</body>
+</html>

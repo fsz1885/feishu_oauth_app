@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>飞书授权邀请</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}" />
+</head>
+<body>
+  <div class="invite-wrap">
+    <div class="invite-panel">
+      <h1>飞书账号授权</h1>
+      <p>请点击下面的按钮完成飞书授权。授权成功后，发起人就可以在工具里选择你的账号进行云文档搜索。</p>
+      <p>授权只会保存你的飞书用户标识和访问凭证，不需要你手动复制任何 code 或 token。</p>
+      <a class="button-link" href="/login">开始授权</a>
+    </div>
+  </div>
+</body>
+</html>
