@@ -61,7 +61,7 @@ feishu_oauth_app/
     ├── routes/
     │   ├── __init__.py
     │   ├── auth.py            # / /login /callback /users /invite/* /front-login
-    │   ├── capture.py         # /capture/targets /capture/run /capture/runs
+    │   ├── capture.py         # /capture/targets /capture/run /capture/status /capture/runs /capture/failures /capture/settings*
     │   ├── docx.py            # /docx/clone-plain-text /docx/minutes-meta
     │   └── search.py          # /search
     ├── services/
@@ -70,12 +70,16 @@ feishu_oauth_app/
     │   ├── feishu_docx.py     # docx 文档读取、创建与纯文本写入
     │   ├── feishu_invite.py   # 通讯录搜索、缓存与邀请消息
     │   └── content_capture.py # “文字记录”抓取编排与后台调度
+    ├── static/              # 前端静态资源（css/js）
+    ├── templates/           # Jinja2 页面模板（index / invite / front_login）
     ├── storage/
     │   ├── json_store.py      # 授权信息本地 JSON 持久化
-    │   └── capture_store.py   # 抓取目标 / 已处理文件 / 运行记录持久化
+    │   ├── capture_store.py   # 抓取目标 / 已处理文件 / 运行记录持久化
+    │   └── atomic_json.py     # JSON 原子写与损坏文件容错备份
     └── utils/
         ├── response.py        # 统一响应
-        └── time_utils.py      # 过期时间处理
+        ├── time_utils.py      # 过期时间处理
+        └── feishu_http.py     # 飞书 API HTTP 封装（限流指数退避）
 ```
 
 ## 启动方式
@@ -132,7 +136,7 @@ FRONTEND_PASSWORD=你的前端访问密码
 | `CAPTURE_REFRESH_SECONDS` | `3600` | 后台自动抓取的间隔（秒，最小 60） |
 | `CAPTURE_TARGET_INTERVAL_SECONDS` | `1.0` | 同一轮内相邻抓取目标之间的间隔（秒），用于降低飞书 API 限流风险，`0` 表示不加间隔 |
 | `CAPTURE_STARTUP_REFRESH` | `false` | 启动时是否立即执行一次抓取 |
-| `CAPTURE_SEARCH_KEYWORD` | `文字记录,Meeting transcript` | 抓取搜索关键词，**逗号分隔支持多语言**（中文系统"文字记录" / 英文系统"Meeting transcript"），标题命中任一关键词即抓取；录制时间支持中英文格式解析 |
+| `CAPTURE_SEARCH_KEYWORD` | `文字记录` | 抓取搜索关键词，**逗号分隔支持多语言**（中文系统"文字记录" / 英文系统"Meeting transcript"，`.env.example` 预置 `文字记录,Meeting transcript`），标题命中任一关键词（大小写不敏感）即抓取；每个 token 分组按关键词各搜一次后按文档 token 去重；录制时间支持中英文格式解析 |
 | `CAPTURE_TARGET_FOLDER_TOKEN` | `""` | 抓取结果要复制到的目标文件夹 token（为空则运行抓取会报错）；也可在页面底部“高级设置”中在线修改，前端设置优先于环境变量 |
 
 ### 3. 启动程序
@@ -383,7 +387,7 @@ http://localhost:8080/invite
 
 ### 第八步：指定用户内容抓取
 
-抓取功能面向“录制文字记录”场景：把要跟踪的同事加入抓取用户组后，程序会定时（或手动触发）搜索该用户新增的标题含“文字记录”的文档，读取纯文本内容，按 `姓名_录制时间` 命名复制到 `CAPTURE_TARGET_FOLDER_TOKEN` 指定的文件夹，并记录已处理文件避免重复抓取。
+抓取功能面向“录制文字记录”场景：把要跟踪的同事加入抓取用户组后，程序会定时（或手动触发）搜索该用户新增的、标题命中任一抓取关键词（默认“文字记录”）的文档，读取纯文本内容，按 `姓名_录制时间` 命名复制到 `CAPTURE_TARGET_FOLDER_TOKEN` 指定的文件夹，并记录已处理文件避免重复抓取。
 
 #### 8.1 查看 / 添加 / 移除抓取目标
 
@@ -422,7 +426,30 @@ curl http://localhost:8080/capture/status
 http://localhost:8080/capture/runs
 ```
 
-> 运行抓取前必须先配置 `CAPTURE_TARGET_FOLDER_TOKEN`。每个抓取目标优先使用其本人在本地已授权的 token，否则回退到请求指定的 `user_key` 或本地第一个已授权用户。
+#### 8.4 查看抓取失败记录
+
+```bash
+curl http://localhost:8080/capture/failures?limit=5
+```
+
+按轮次展开最近的失败明细（整轮 / 目标级 / 文件级），`limit` 取最近 1–20 轮，默认 5。
+
+#### 8.5 查看 / 在线修改目标文件夹 token
+
+```bash
+# 查看当前生效的目标文件夹 token（脱敏）及其来源
+curl http://localhost:8080/capture/settings
+
+# 在线修改：须显式传 confirm=true；后端先做格式校验，再调用飞书
+# 在目标文件夹创建一篇“验证用”测试文档，校验通过才会保存
+curl -X POST http://localhost:8080/capture/settings/folder-token \
+  -H "Content-Type: application/json" \
+  -d '{"folder_token": "fldcn_xxx", "confirm": true}'
+```
+
+> 在线修改保存的是前端覆盖值，优先于环境变量 `CAPTURE_TARGET_FOLDER_TOKEN`；验证产生的测试文档需手动删除。
+
+> 运行抓取前必须先配置目标文件夹 token（环境变量 `CAPTURE_TARGET_FOLDER_TOKEN` 或上述在线修改）。每个抓取目标优先使用其本人在本地已授权的 token，否则回退到请求指定的 `user_key` 或本地第一个已授权用户。
 
 ## 本地存储格式
 
@@ -531,10 +558,10 @@ data/auth_store.json
 `/capture/run`（以及后台定时任务）的执行流程如下：
 
 1. 从 `capture_store.json` 读取抓取用户组（targets）
-2. 对每个目标用户：
+2. 把目标按 token 分组（同一授权 token 的目标合并为一组，每组整轮只搜索一次）：
    - 优先使用该用户本人在本地的 OAuth token，否则回退到默认已授权用户
-   - 以 `CAPTURE_SEARCH_KEYWORD`（默认“文字记录”）为关键词、以该用户为 owner 搜索 doc/docx 文档（搜索接口的 owner 过滤对 user token 不可靠，程序会在本地按 owner_id 二次过滤）
-   - 跳过标题不含“文字记录”或已处理过的文件
+   - 以 `CAPTURE_SEARCH_KEYWORD` 的每个关键词（默认“文字记录”，`.env.example` 预置 `文字记录,Meeting transcript`）各搜索一次 doc/docx 文档，再按文档 token 去重合并（搜索接口的 owner 过滤对 user token 不可靠，程序会在本地按 owner_id 二次过滤）
+   - 跳过标题不含任一关键词（大小写不敏感）或已处理过的文件
 3. 对每个新文件：
    - 读取 `raw_content`，从文档头部解析录制时间，生成 `姓名_yyyyMMdd_HHmm` 标题
    - 将纯文本内容复制到 `CAPTURE_TARGET_FOLDER_TOKEN` 指定的文件夹
@@ -562,7 +589,7 @@ data/auth_store.json
 
 ## 前端页面现在是怎么运行的
 
-首页 `/` 会渲染一个内嵌 HTML 页面（访问前需通过 `/front-login` 密码验证）。页面加载后会自动请求 `/users`、`/invite/contacts`、`/capture/targets` 填充各个选择框和列表。
+首页 `/` 会渲染一个 HTML 页面（Jinja 模板 `app/templates/index.html`，访问前需通过 `/front-login` 密码验证）。页面加载后会自动请求 `/users`、`/invite/contacts`、`/capture/targets` 填充各个选择框和列表。
 
 页面包含五个主要面板：
 
