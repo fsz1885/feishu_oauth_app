@@ -105,22 +105,35 @@ class ContentCaptureService:
                 try:
                     session_record = self.oauth_service.ensure_valid_access_token(group_key)
                     access_token = session_record["tokens"]["access_token"]
-                    group_files = self.search_service.search_docs(
-                        access_token=access_token,
-                        keyword=self.settings.capture_search_keyword,
-                        docs_types=["doc", "docx"],
-                        count=50,
-                        max_pages=4,
-                    )
-                    search_group_count += 1
+                    # Search once per keyword (multi-language titles, e.g.
+                    # 文字记录 / Meeting transcript), merge and dedupe by token.
+                    keywords = self.settings.capture_search_keywords
+                    group_files: List[Dict[str, Any]] = []
+                    seen_file_keys = set()
+                    for keyword in keywords:
+                        keyword_files = self.search_service.search_docs(
+                            access_token=access_token,
+                            keyword=keyword,
+                            docs_types=["doc", "docx"],
+                            count=50,
+                            max_pages=4,
+                        )
+                        search_group_count += 1
+                        for file in keyword_files:
+                            dedupe_key = self._file_token(file) or str(file.get("title"))
+                            if not dedupe_key or dedupe_key in seen_file_keys:
+                                continue
+                            seen_file_keys.add(dedupe_key)
+                            group_files.append(file)
                     files_by_owner: Dict[str, List[Dict[str, Any]]] = {}
                     for file in group_files:
                         owner = str(file.get("owner_id") or "").strip()
                         if owner:
                             files_by_owner.setdefault(owner, []).append(file)
                     logger.info(
-                        "capture group searched: auth_user=%s files=%d owners=%d",
+                        "capture group searched: auth_user=%s keywords=%s files=%d owners=%d",
                         session_record["user_key"],
+                        keywords,
                         len(group_files),
                         len(files_by_owner),
                     )
@@ -345,7 +358,7 @@ class ContentCaptureService:
                 continue
 
             title = str(file.get("title") or file.get("name") or "").strip()
-            if "文字记录" not in title:
+            if not self._title_matches_keywords(title):
                 skipped_count += 1
                 items.append({"ok": True, "skipped": True, "reason": "title filter mismatch", "token": token, "title": title})
                 continue
@@ -443,6 +456,14 @@ class ContentCaptureService:
                 return key
         return None
 
+    def _title_matches_keywords(self, title: str) -> bool:
+        """Title passes if it contains ANY configured keyword (case-insensitive)."""
+        lowered = (title or "").casefold()
+        for keyword in self.settings.capture_search_keywords:
+            if keyword.casefold() in lowered:
+                return True
+        return False
+
     @classmethod
     def _file_token(cls, file: Dict[str, Any]) -> str:
         for field in cls.TOKEN_FIELDS:
@@ -461,9 +482,28 @@ class ContentCaptureService:
         cleaned = re.sub(r'[\\/:*?"<>|\s]+', "_", value.strip())
         return cleaned.strip("_") or "unknown"
 
-    @staticmethod
-    def _extract_recording_stamp(content: str) -> str:
+    ENGLISH_MONTHS = {
+        "jan": 1, "feb": 2, "mar": 3, "apr": 4, "may": 5, "jun": 6,
+        "jul": 7, "aug": 8, "sep": 9, "oct": 10, "nov": 11, "dec": 12,
+    }
+
+    @classmethod
+    def _extract_recording_stamp(cls, content: str) -> str:
         head = "\n".join(content.splitlines()[:12])
+
+        # English system language first, e.g.
+        # "Time: Sep 28, 2026 (Mon) 14:37 - 20:39 (GMT+08)"
+        english = re.search(
+            r"\b(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s+(\d{1,2}),?\s+(\d{4}).*?\b(\d{1,2}):(\d{2})",
+            head,
+            flags=re.I | re.S,
+        )
+        if english:
+            month = cls.ENGLISH_MONTHS[english.group(1).lower()]
+            day, year = int(english.group(2)), english.group(3)
+            hour, minute = english.group(4), english.group(5)
+            return f"{year}{month:02d}{day:02d}_{int(hour):02d}{minute}"
+
         patterns = [
             r"录音时间[：:]\s*(\d{4})年\s*(\d{1,2})月\s*(\d{1,2})日.*?(\d{1,2})[:：](\d{2})",
             r"录制时间[：:]\s*(\d{4})年\s*(\d{1,2})月\s*(\d{1,2})日.*?(\d{1,2})[:：](\d{2})",

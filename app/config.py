@@ -36,6 +36,21 @@ class Settings:
         float(os.getenv("CAPTURE_TARGET_INTERVAL_SECONDS", "1.0")), 0.0
     )
     capture_search_keyword: str = os.getenv("CAPTURE_SEARCH_KEYWORD", "文字记录")
+
+    @property
+    def capture_search_keywords(self) -> List[str]:
+        """Comma-separated search keywords (multi-language support).
+
+        e.g. "文字记录,Meeting transcript" — matches either Chinese or English
+        system-language document titles. Single values keep working.
+        """
+        raw = self.capture_search_keyword or "文字记录"
+        keywords: List[str] = []
+        for part in raw.split(","):
+            part = part.strip()
+            if part and part not in keywords:
+                keywords.append(part)
+        return keywords or ["文字记录"]
     capture_target_folder_token: str = os.getenv("CAPTURE_TARGET_FOLDER_TOKEN", "")
     requested_scopes: List[str] = field(
         default_factory=lambda: [
