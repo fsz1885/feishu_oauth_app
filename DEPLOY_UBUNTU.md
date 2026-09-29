@@ -37,12 +37,36 @@ nano .env
 FEISHU_APP_ID=cli_xxx
 FEISHU_APP_SECRET=xxx
 FEISHU_REDIRECT_URI=http://your-domain-or-ip:8080/callback
-FRONTEND_PASSWORD=change_me_to_a_strong_password
+FRONTEND_PASSWORD=换成你自己的强密码
 SESSION_SECRET_KEY=replace_with_a_long_random_string
 CAPTURE_TARGET_FOLDER_TOKEN=目标飞书文件夹token
 ```
 
-如果通过 Nginx 反代到 80/443，`FEISHU_REDIRECT_URI` 要写外部可访问的回调地址，例如：
+### HTTPS 部署（推荐，Caddy + Let's Encrypt）
+
+生产环境建议使用 Caddy 反向代理，自动申请并续期免费 HTTPS 证书。配置文件已自带：`deploy/caddy/Caddyfile`。
+
+1. 域名 A 记录指向服务器公网 IP，云安全组放行 **80/443**
+2. 编辑 `deploy/caddy/Caddyfile`，把 `mkt.gemdalesh.cn` 换成你的域名；同时确认 `reverse_proxy` 的目标端口与 `docker-compose.yml` 宿主机端口映射左侧一致（默认 `8080`，当前生产实例为 `3011`）
+3. 启动 Caddy（host 网络，证书数据持久化）：
+
+```bash
+mkdir -p /opt/caddy-data /opt/caddy-config
+docker run -d --name feishu-caddy --network host --restart unless-stopped \
+  -v $PWD/deploy/caddy/Caddyfile:/etc/caddy/Caddyfile:ro \
+  -v /opt/caddy-data:/data -v /opt/caddy-config:/config \
+  caddy:2-alpine
+```
+
+4. `.env` 同步改为域名地址：`FEISHU_REDIRECT_URI=https://你的域名/callback`、`PUBLIC_BASE_URL=https://你的域名`，然后重建应用容器：
+
+```bash
+sudo docker compose up -d --build --force-recreate
+```
+
+5. 飞书开发者后台「安全设置」中新增重定向 URL：`https://你的域名/callback`
+
+不使用 Caddy、自行用 Nginx 等其他反代时同理：`FEISHU_REDIRECT_URI` 要写外部可访问的回调地址，例如：
 
 ```env
 FEISHU_REDIRECT_URI=https://your-domain.com/callback

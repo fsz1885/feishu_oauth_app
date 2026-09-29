@@ -126,7 +126,7 @@ FRONTEND_PASSWORD=你的前端访问密码
 | `LOCAL_STORE_PATH` | `data/auth_store.json` | 本地认证信息存储路径 |
 | `PUBLIC_BASE_URL` | `""` | 对外暴露的 base URL，用于生成邀请链接（如 `https://your-domain.com`） |
 | `FRONTEND_USERNAME` | `admin` | 前端页面与受保护接口的登录用户名 |
-| `FRONTEND_PASSWORD` | `change_me_to_a_strong_password` | 前端页面与受保护接口的访问密码，**部署前务必修改** |
+| `FRONTEND_PASSWORD` | `change_me_to_a_strong_password` | 前端页面与受保护接口的访问密码，**部署前务必修改**，不要使用占位符 |
 | `SESSION_SECRET_KEY` | 取 `FEISHU_APP_SECRET` | Flask session 加密密钥，建议设置为独立的长随机字符串 |
 | `CONTACT_CACHE_REFRESH_SECONDS` | `3600` | 通讯录缓存自动刷新间隔（秒） |
 | `CONTACT_CACHE_STARTUP_REFRESH` | `true` | 启动时是否立即刷新通讯录缓存 |

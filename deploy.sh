@@ -54,9 +54,10 @@ check_placeholder() {
   local bad=0
   grep -qE '^FEISHU_APP_ID=(cli_xxx|cli_xxxxxxxxxxxxx)' .env && bad=1
   grep -qE '^FEISHU_APP_SECRET=replace_me' .env && bad=1
+  grep -qE '^FRONTEND_PASSWORD=change_me_to_a_strong_password$' .env && bad=1
   if [ "$bad" = "1" ]; then
-    c_warn "检测到 .env 里仍是模板占位符 (FEISHU_APP_ID / FEISHU_APP_SECRET 未填写)。"
-    c_warn "请先编辑 .env 填入真实飞书应用凭据，否则容器启动会失败。"
+    c_warn "检测到 .env 里仍是模板占位符（飞书凭据未填写，或前端密码仍为默认值）。"
+    c_warn "请先编辑 .env 填入真实配置：缺凭据容器会启动失败，默认密码会带来安全风险。"
     printf "是否仍然继续构建? [y/N] "
     read -r ans
     case "${ans,,}" in
@@ -79,8 +80,9 @@ case "$ACTION" in
     sleep 2
     c_info "容器状态:"
     $DC ps
-    # 推导访问端口
-    PORT="$(grep -E '^APP_PORT=' .env | head -1 | cut -d= -f2 || true)"
+    # 推导访问端口：读取 docker-compose.yml 宿主机端口映射左侧。
+    # 注意容器内 gunicorn 固定监听 8080，.env 的 APP_PORT 在 Docker 部署下不生效。
+    PORT="$(grep -oE '"[0-9]+:8080"' docker-compose.yml 2>/dev/null | head -1 | tr -d '"' | cut -d: -f1 || true)"
     PORT="${PORT:-8080}"
     cat <<EOF
 
