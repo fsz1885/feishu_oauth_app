@@ -1,4 +1,4 @@
-mkt.gemdalesh.com.cn, mkt.gemdalesh.cn {
+mkt.gemdalesh.com.cn {
     encode gzip
     reverse_proxy 127.0.0.1:3011
 }
